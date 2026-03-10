@@ -1,0 +1,208 @@
+================================================================================
+  EDEN ENGINE - PLANS & STATUS
+  Base Engine : Godot Engine 4.6.1-stable
+  Branch      : eden/main
+  Voxel System: Zylann/godot_voxel (modules/voxel)
+  Last Updated: March 9, 2026
+================================================================================
+
+================================================================================
+  CURRENT STATE
+================================================================================
+
+  Godot 4.6.1-stable cloned into F:\Dev\GodotEden
+  Branch: eden/main
+  modules/voxel = Zylann/godot_voxel (master) cloned and present
+
+  Modules:
+    modules/voxel/          [x] CLONED  - Zylann/godot_voxel (voxel terrain)
+    modules/jolt_physics/   [x] BUNDLED - Already in Godot 4.6 (no action needed)
+    modules/eden_physics/   [ ] SKIPPED - Planetary gravity, add later if needed
+    modules/eden_largeworld/[ ] SKIPPED - LWC/origin rebasing, add later if needed
+
+================================================================================
+  BUILD INSTRUCTIONS
+================================================================================
+
+  Prerequisites:
+    - Visual Studio 2022+ with "Desktop development with C++" workload
+    - Python 3.10+  (pip install scons)
+    - SCons 4.x     (pip install scons)
+    - Vulkan SDK 1.3.280+  (sets VULKAN_SDK env var automatically)
+
+  Build command (from F:\Dev\GodotEden\):
+    scons platform=windows target=editor arch=x86_64
+
+  Output: bin\godot.windows.editor.x86_64.exe
+
+  Verify voxel module works:
+    1. Launch the editor
+    2. Create a new 3D scene
+    3. Add Node -> search "Voxel" -> VoxelTerrain should appear
+    If VoxelTerrain appears, the build is successful.
+
+================================================================================
+  PHASE PLAN
+================================================================================
+
+  Phase 1 - Godot 4.6.1 + godot_voxel builds cleanly     [x] COMPLETE — bin\godot.windows.editor.x86_64.exe (167MB)
+  Phase 2 - Basic voxel terrain scene in editor           [~] TESTING — scenes/terrain_test.tscn now uses PlanetGenerator (sphere SDF)
+  Phase 3 - Smooth terrain with VoxelLodTerrain + noise   [~] TESTING — planet_generator.gd (VoxelGeneratorScript, 3D noise sphere SDF, lazy init fixed)
+  Phase 4 - Terrain shader + material system              [~] IN PROGRESS — eden/shaders/terrain_smooth.gdshader (needs texture arrays)
+  Phase 5 - Runtime terrain editing (dig/build)           [ ] NOT STARTED
+  Phase 6 - Collision + Jolt integration                  [~] READY — generate_collisions=true, Jolt handles ConcavePolygonShape3D natively
+  Phase 7 - Biome system (foliage + terrain variety)      [ ] NOT STARTED
+  Phase 8 - Planetary generator (~40km radius)            [~] SCRIPTS COMPLETE — all 7 scripts written, type errors fixed, wired to test scene
+  Phase 9 - Planetary gravity (eden_physics, if needed)   [~] IN PLAYER — player.gd uses global_position.normalized() as up vector
+  Phase 10 - Large World Coordinates (eden_largeworld)    [ ] NOT STARTED
+  Phase 11 - Visual Node Graph Scripting Editor           [ ] NOT STARTED
+  Phase 12 - VCT GI Fallback (optional)                  [ ] NOT STARTED
+
+================================================================================
+  KEY URLS
+================================================================================
+
+  Godot Engine repo:        https://github.com/godotengine/godot
+  godot_voxel repo:         https://github.com/Zylann/godot_voxel
+  godot_voxel docs:         https://voxel-tools.readthedocs.io/en/latest/
+  godot_voxel quick start:  https://voxel-tools.readthedocs.io/en/latest/quick_start/
+  godot_voxel solar system: https://github.com/Zylann/solar_system_demo  (planet generator reference)
+  Godot compile guide:      https://docs.godotengine.org/en/stable/contributing/development/compiling/
+  Jolt Physics:             https://github.com/jrouwe/JoltPhysics
+  Inigo Quilez SDF funcs:   https://iquilezles.org/articles/distfunctions/
+  Planet gen (redblobgames): https://www.redblobgames.com/x/1843-planet-generation/
+  Planet gen (source):       https://github.com/redblobgames/1843-planet-generation
+  Plate tectonics (kenny):   https://kenny.wtf/posts/world-synth-tectonic-plates/
+  Rivers (mapgen4):          https://simblob.blogspot.com/2018/10/mapgen4-river-representation.html
+  Voronoi on sphere:         https://www.redblobgames.com/x/1842-delaunay-voronoi-sphere/
+
+================================================================================
+  TERRAIN SHADER
+================================================================================
+
+  Location:  eden/shaders/terrain_smooth.gdshader
+  Guide:     eden/shaders/terrain_smooth_setup.md
+
+  Features:
+    - Triplanar texture projection (no UVs required)
+    - Mixel4 voxel texture blending (up to 4 textures per voxel, 16 total)
+    - Procedural slope  -> rock overlay (steep faces = rock)
+    - Procedural height -> snow cap (flat + high = snow)
+    - Virtual detail normalmap support (VoxelLodTerrain detail rendering)
+    - Transvoxel LOD seam correction (CUSTOM0)
+    - LOD cross-fade dithering (u_lod_fade)
+
+  Texture slot layout (Texture2DArray):
+    0 = Grass    1 = Rock    2 = Snow    3 = Sand    4 = Dirt    5 = Moss
+
+================================================================================
+  VOXEL PHYSICS (JOLT)
+================================================================================
+
+  Status: READY — no C++ changes needed.
+
+  How it works:
+    - VoxelLodTerrain generates ConcavePolygonShape3D per chunk automatically
+    - Jolt (bundled in Godot 4.6) handles ConcavePolygonShape3D natively
+    - StaticBody3D nodes are created per chunk by the voxel engine
+
+  Inspector settings on VoxelLodTerrain:
+    generate_collisions   = true
+    collision_lod_count   = 1     (only LOD0 = near chunks get collision)
+    collision_margin      = 0.04  (Jolt default; smooth terrain works well here)
+
+  For characters / physics objects ON the terrain:
+    - Use CharacterBody3D + move_and_slide() as normal — Jolt handles it
+    - VoxelBoxMover exists for blocky voxels only (not needed for smooth terrain)
+
+================================================================================
+  BIOME SYSTEM PLAN
+================================================================================
+
+  Goal: diverse biomes with varying terrain shape AND foliage.
+
+  TERRAIN SHAPE (VoxelGeneratorGraph):
+    Use a "biome selector" noise at low frequency (large scale) to blend between
+    biome SDF subgraphs via VoxelGraphFunction nodes:
+      - Lowlands biome:  flat noise2D heightmap, mild amplitude
+      - Hills biome:     ridge noise + octaves, moderate amplitude
+      - Mountains biome: ridged fractal + erosion approximation, high amplitude
+      - Desert biome:    smooth noise + dune-like waves
+      - Arctic biome:    flat high-altitude plateau + steep cliffs
+
+  MATERIAL PAINTING (in the same graph):
+    Add OutputSingleTexture or OutputWeight nodes:
+      - Slope angle  -> select rock (slot 1)
+      - Height       -> select snow (slot 2) above threshold
+      - Biome weight -> select grass (0) vs sand (3) vs moss (5) etc.
+    The terrain_smooth.gdshader procedural overlays act as a fallback/enhancement.
+
+  FOLIAGE (VoxelInstancer):
+    One VoxelInstancer child node per biome layer.
+    Each item (VoxelInstanceLibraryMultiMeshItem) has a VoxelInstanceGenerator with:
+      - min/max height        -> restricts to biome altitude band
+      - min/max slope degrees -> grass on flat, none on cliffs
+      - noise + threshold     -> density variation / clustering
+      - voxel_material_filter_mask -> only spawn on specific material index!
+        (e.g. grass slot = 0 -> trees only on grass voxels)
+
+  VoxelInstanceGenerator key properties per biome:
+    GRASSLAND:  density=0.3, slope 0-30deg, noise clustering, mat filter=0 (grass)
+    FOREST:     density=0.6, slope 0-25deg, larger noise scale, mat filter=0
+    MOUNTAIN:   density=0.1, slope 0-15deg (only on ledges), mat filter=1 (rock)
+    DESERT:     density=0.05, slope 0-20deg, sparse cacti, mat filter=3 (sand)
+    ARCTIC:     density=0.2, slope 0-20deg, snow-covered shrubs, mat filter=2 (snow)
+
+================================================================================
+  PLANET GENERATION
+================================================================================
+
+  Design doc:  eden/planet/planet_generation_design.md
+
+  Two-phase approach:
+    PHASE A (offline, ~seconds): Pre-generate large-scale data
+      - Voronoi sphere (~20k regions, Fibonacci + jitter)
+      - Tectonic plates (BFS flood-fill with cost function, 15–25 plates)
+      - Plate boundary classification (convergent/divergent/transform)
+      - Elevation field (boundary rules + distance-field interpolation + noise)
+      - Moisture + Temperature (latitude, rain shadow, altitude lapse)
+      - Biome assignment (Whittaker temp/moisture table, 12 biome types)
+      - Rivers (binary tree on Delaunay mesh, rainfall simulation)
+
+    PHASE B (real-time, per chunk): VoxelGeneratorScript queries Phase A data
+      - Sphere SDF base + plate elevation + biome noise + river carving
+      - Material index from biome → texture slot
+      - O(log N) region lookup via spatial hash on sphere
+
+  Files to create (eden/planet/):
+    planet_pre_generator.gd   — Phase A full pipeline
+    voronoi_sphere.gd         — Fibonacci points, BFS, spatial query
+    plate_tectonics.gd        — Plate growing + boundary elevation
+    biome_classifier.gd       — Temp/moisture → biome enum
+    river_system.gd           — Binary tree river flow
+    planet_data.gd            — Serialisable data container
+    planet_generator.gd       — VoxelGeneratorScript (Phase B query)
+
+  Scale:
+    Radius: 40,000 m | Max terrain height: 3,000 m | Ocean depth: -2,000 m
+    LOD count: 8 | LOD0 = 1m voxels | view_distance: 32 km
+    Floating point acceptable at 40km (precision ~4mm) — no LWC needed yet
+
+================================================================================
+
+  - eden_voxel (our custom voxel module) has been removed entirely.
+    Replaced by Zylann/godot_voxel which is mature, MIT licensed, and
+    supports: Transvoxel smooth terrain, LOD, blocky terrain, collision,
+    instancing, streaming, SQLite save/load, and more out of the box.
+
+  - godot_voxel MUST live at modules/voxel (exact name required by its build).
+
+  - Jolt physics is already bundled in Godot 4.3+. No separate integration needed.
+
+  - To update godot_voxel in the future:
+      cd F:\Dev\GodotEden\modules\voxel
+      git pull
+      cd F:\Dev\GodotEden
+      scons platform=windows target=editor arch=x86_64
+
+================================================================================
