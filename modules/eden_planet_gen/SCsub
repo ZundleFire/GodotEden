@@ -1,0 +1,14 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_eden_planet_gen = env_modules.Clone()
+
+# Voxel module headers require ZN_GODOT to resolve cross-platform macros.
+env_eden_planet_gen.Append(CPPDEFINES=["ZN_GODOT"])
+
+module_obj = []
+env_eden_planet_gen.add_source_files(module_obj, "*.cpp")
+
+env.modules_sources += module_obj

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="GPUErosion" inherits="RefCounted" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		GPU-accelerated particle-based hydraulic erosion via Vulkan compute shaders.
+	</brief_description>
+	<description>
+		Uses RenderingDevice to dispatch erosion particles on the GPU in parallel. Heightmap data is stored as fixed-point integers in storage buffers, and atomicAdd is used for thread-safe concurrent writes. Supports grids from 128×128 up to 4096×4096 with 100K+ particles in milliseconds.
+	</description>
+	<methods>
+		<method name="erode">
+			<return type="Dictionary" />
+			<param index="0" name="height_data" type="PackedFloat32Array" />
+			<param index="1" name="sediment_data" type="PackedFloat32Array" />
+			<param index="2" name="seed" type="int" />
+			<description>
+				Runs GPU erosion. Returns Dictionary with "height", "sediment", and "completed" keys.
+			</description>
+		</method>
+		<method name="is_gpu_available">
+			<return type="bool" />
+			<description>
+				Returns true if the Vulkan compute pipeline initialised successfully.
+			</description>
+		</method>
+	</methods>
+</class>

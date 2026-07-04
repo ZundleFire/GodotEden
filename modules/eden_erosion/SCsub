@@ -1,0 +1,23 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_eden_erosion = env_modules.Clone()
+
+# The VoxelBlockFiller includes headers from the voxel module which require
+# the ZN_GODOT define to resolve their cross-platform macros.
+env_eden_erosion.Append(CPPDEFINES=["ZN_GODOT"])
+
+# Tier 2: Enable OpenMP for parallel heightmap filling.
+# MSVC uses /openmp, GCC/Clang use -fopenmp.
+if env.msvc:
+    env_eden_erosion.Append(CCFLAGS=["/openmp"])
+else:
+    env_eden_erosion.Append(CCFLAGS=["-fopenmp"])
+    env_eden_erosion.Append(LINKFLAGS=["-fopenmp"])
+
+module_obj = []
+env_eden_erosion.add_source_files(module_obj, "*.cpp")
+
+env.modules_sources += module_obj

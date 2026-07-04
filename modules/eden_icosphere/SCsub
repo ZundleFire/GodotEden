@@ -1,0 +1,22 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_eden_ico = env_modules.Clone()
+
+# Reuse the ZN_GODOT define so we can share voxel module types if needed.
+env_eden_ico.Append(CPPDEFINES=["ZN_GODOT"])
+
+# Enable OpenMP for parallel heightmap filling.
+if env.msvc:
+    env_eden_ico.Append(CCFLAGS=["/openmp"])
+else:
+    env_eden_ico.Append(CCFLAGS=["-fopenmp"])
+    env_eden_ico.Append(LINKFLAGS=["-fopenmp"])
+    env.Append(LINKFLAGS=["-fopenmp"])  # propagate to final link
+
+module_obj = []
+env_eden_ico.add_source_files(module_obj, "*.cpp")
+
+env.modules_sources += module_obj

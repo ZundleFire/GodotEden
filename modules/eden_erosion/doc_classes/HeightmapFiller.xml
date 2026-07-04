@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HeightmapFiller" inherits="RefCounted" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		C++ accelerated heightmap chunk filler for planet terrain generation.
+	</brief_description>
+	<description>
+		Replaces the GDScript heightmap fill loop which iterates 512² = 262,144 cells, each performing 8 noise samples + a Voronoi tectonic query. Moving this tight loop into C++ provides ~50-100× speedup.
+		Usage: create once, configure noise layers and tectonic data, then call [method fill_chunk] per chunk.
+	</description>
+	<methods>
+		<method name="set_noise_layers">
+			<return type="void" />
+			<param index="0" name="base" type="FastNoiseLite" />
+			<param index="1" name="continent" type="FastNoiseLite" />
+			<param index="2" name="plateau" type="FastNoiseLite" />
+			<param index="3" name="oceanic" type="FastNoiseLite" />
+			<param index="4" name="mountain" type="FastNoiseLite" />
+			<param index="5" name="trench" type="FastNoiseLite" />
+			<param index="6" name="rift" type="FastNoiseLite" />
+			<param index="7" name="detail" type="FastNoiseLite" />
+			<description>
+				Sets the 8 terrain noise layers. Must be called before [method fill_chunk].
+			</description>
+		</method>
+		<method name="set_warp_noises">
+			<return type="void" />
+			<param index="0" name="warp_x" type="FastNoiseLite" />
+			<param index="1" name="warp_y" type="FastNoiseLite" />
+			<param index="2" name="warp_z" type="FastNoiseLite" />
+			<description>
+				Sets the 3 domain-warp noises used for tectonic border warping.
+			</description>
+		</method>
+		<method name="set_tectonic_data">
+			<return type="void" />
+			<param index="0" name="voronoi_points" type="PackedVector3Array" />
+			<param index="1" name="voronoi_grid" type="Array" />
+			<param index="2" name="plate_id" type="PackedInt32Array" />
+			<param index="3" name="falloff" type="PackedFloat32Array" />
+			<param index="4" name="bnd_type" type="PackedByteArray" />
+			<param index="5" name="is_oceanic" type="PackedByteArray" />
+			<param index="6" name="plate_elev_bias" type="PackedFloat32Array" />
+			<param index="7" name="cross_plate_ang" type="PackedFloat32Array" />
+			<description>
+				Passes all pre-baked tectonic data arrays from PlateTectonics into C++.
+			</description>
+		</method>
+		<method name="set_amplitudes">
+			<return type="void" />
+			<param index="0" name="base" type="float" />
+			<param index="1" name="continent" type="float" />
+			<param index="2" name="plateau" type="float" />
+			<param index="3" name="oceanic" type="float" />
+			<param index="4" name="mountain" type="float" />
+			<param index="5" name="trench" type="float" />
+			<param index="6" name="rift" type="float" />
+			<param index="7" name="detail" type="float" />
+			<description>
+				Sets the amplitude constants for each noise layer.
+			</description>
+		</method>
+		<method name="set_half_widths">
+			<return type="void" />
+			<param index="0" name="mtn" type="float" />
+			<param index="1" name="trench" type="float" />
+			<param index="2" name="rift" type="float" />
+			<description>
+				Sets the boundary half-widths for mountain, trench, and rift masks.
+			</description>
+		</method>
+		<method name="fill_chunk">
+			<return type="PackedFloat32Array" />
+			<param index="0" name="face" type="int" />
+			<param index="1" name="gx" type="int" />
+			<param index="2" name="gy" type="int" />
+			<param index="3" name="grid_n" type="int" />
+			<param index="4" name="resolution" type="int" />
+			<description>
+				Fills a heightmap chunk and returns a PackedFloat32Array of resolution² height values.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="planet_radius" type="float" setter="set_planet_radius" getter="get_planet_radius" default="40000.0">
+			Planet radius in metres.
+		</member>
+		<member name="border_warp" type="float" setter="set_border_warp" getter="get_border_warp" default="0.2">
+			Domain warp strength for tectonic border warping.
+		</member>
+	</members>
+</class>

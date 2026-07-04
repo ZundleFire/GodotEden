@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="TerrainStamp" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A placeable heightmap terrain patch resource.
+	</brief_description>
+	<description>
+		Holds a 2D heightmap Image and parameters for blending into planet terrain SDF. Used with TerrainStampPlacer to place eroded terrain features at specific locations.
+	</description>
+</class>

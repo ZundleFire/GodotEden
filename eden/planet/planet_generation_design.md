@@ -21,12 +21,12 @@ voxel generation stays fast enough for streaming LOD.
 ================================================================================
 ## PHASE A — PRE-GENERATION PIPELINE
 
-### Step 1: Sphere Discretisation (Voronoi Regions)
+### Step 1: Sphere Discretisation (Geodesic Regions)
 
-Subdivide the planet sphere into ~10,000–50,000 Voronoi "regions" (cells).
+Subdivide the planet sphere into ~10,000–50,000 Geodesic "regions" (cells).
 - Place seed points on sphere using Fibonacci sphere distribution for initial
   even coverage, then apply random jitter to break regularity.
-- Build Delaunay triangulation → dual gives Voronoi polygons.
+- Build Delaunay triangulation → dual gives Geodesic polygons.
 - Each region knows: center point (Vector3 on unit sphere), neighbor region IDs.
 - This becomes the graph for BFS/flood-fill operations.
 
@@ -155,7 +155,7 @@ Using temperature + moisture lookup:
 
 ### Step 8: Rivers (mapgen4 approach, adapted for sphere)
 
-  - Rivers flow on the Delaunay triangle mesh (dual of Voronoi)
+  - Rivers flow on the Delaunay triangle mesh (Geodesic)
   - Each triangle = one river segment node
   - Build binary tree: start from coastlines, grow uphill following lowest-elevation
     neighbors, fork at tributaries until reaching "springs" at moisture-rich high areas
@@ -179,7 +179,7 @@ When VoxelLodTerrain needs a chunk at world position P:
 Given a 3D world position P, map to planet surface:
   1. direction   = normalize(P - planet_center)
   2. surface_pos = planet_center + direction * planet_radius
-  3. Find which Voronoi region contains surface_pos
+  3. Find which Geodesic region contains surface_pos
      → Use spatial hash / k-d tree on sphere for O(log N) lookup
      → Returns: region data (elevation, biome, moisture, river_flow)
 
@@ -298,7 +298,7 @@ Given a 3D world position P, map to planet surface:
   Max terrain height:   3,000 m (mountains) — 7.5% of radius, feels large
   Ocean depth:         -2,000 m (ocean floor)
   Snow line:            2,000 m elevation
-  Voronoi region count: 20,000 (each covers ~3.14 km² avg at surface)
+  Geodesic region count: 20,000 (each covers ~3.14 km² avg at surface)
   Num tectonic plates:  15–25
 
   VoxelLodTerrain settings:
@@ -318,14 +318,14 @@ Given a 3D world position P, map to planet surface:
 
   redblobgames/1843-planet-generation  (JS, Apache-2.0)
     → planet-generation.js: tectonic plates, elevation, biomes, rivers
-    → sphere-mesh.js: Fibonacci sphere, Delaunay/Voronoi on sphere
+    → sphere-mesh.js: Fibonacci sphere, Delaunay/Geodesic on sphere
     → Translatable to GDScript almost 1:1 (array-based, no complex deps)
     → URL: https://github.com/redblobgames/1843-planet-generation
 
   kenny.wtf world-synth  (TS/WebGL)
     → Cost function BFS for plate growing (distanceScore + biasDirectionScore)
     → Continental vs oceanic crust expansion in two passes
-    → H3 hex grid (we'll use Voronoi instead)
+    → H3 hex grid (we'll use Geodesic instead)
     → URL: https://kenny.wtf/posts/world-synth-tectonic-plates/
 
   mapgen4 river system  (JS, redblobgames)

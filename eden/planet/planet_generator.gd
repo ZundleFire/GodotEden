@@ -12,6 +12,7 @@
 ##   sdf = |pos| - planet_radius - terrain_height(biome, noise)
 ## Negative SDF = solid, positive = air.
 
+@tool
 class_name PlanetGenerator
 extends VoxelGeneratorScript
 
@@ -173,6 +174,10 @@ func _sample_height(x: float, y: float, z: float, scale: float) -> float:
 # --------------------------------------------------------------------------- #
 # Utility: expose noise seeds for re-seeding from PlanetData seed
 # --------------------------------------------------------------------------- #
+
+func _get_used_channels_mask() -> int:
+	return (1 << VoxelBuffer.CHANNEL_SDF) | (1 << VoxelBuffer.CHANNEL_INDICES)
+
 
 func set_noise_seeds(s: int) -> void:
 	_noise_macro.seed = s

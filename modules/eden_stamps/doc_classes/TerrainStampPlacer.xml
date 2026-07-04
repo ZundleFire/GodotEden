@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="TerrainStampPlacer" inherits="RefCounted" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Runtime system for blending TerrainStamp patches into voxel terrain.
+	</brief_description>
+	<description>
+		Manages a collection of placed TerrainStamp resources and blends them into the planet's SDF during block generation. Supports smooth union, subtraction, and replacement blend modes.
+	</description>
+</class>
