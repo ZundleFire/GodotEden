@@ -2,6 +2,7 @@
 
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "core/math/random_number_generator.h"
 #include "eden_planet_generator.h"
 
 // ── SurfaceData ──────────────────────────────────────────────────────────────
@@ -254,6 +255,100 @@ Ref<SurfaceData> WorldDataModule::get_surface_data_at(const Vector3 &p_pos) cons
 	return sd;
 }
 
+Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const Dictionary &p_filters) const {
+	Array out;
+	ERR_FAIL_COND_V(p_count <= 0, out);
+
+	Ref<EdenPlanetGenerator> gen;
+	Vector3 center;
+	{
+		MutexLock lock(_mutex);
+		gen = _generator;
+		center = _planet_center;
+	}
+	ERR_FAIL_COND_V_MSG(gen.is_null(), out,
+			"WorldDataModule: no generator wired — call EdenPlanetGenerator.setup() first");
+	const float radius = gen->get_planet_radius();
+
+	// Filters (all optional).
+	Array biomes = p_filters.get("biomes", Array());
+	const bool land_only = p_filters.get("land_only", false);
+	const float min_height = p_filters.get("min_height", -1.0e12f);
+	const float max_height = p_filters.get("max_height", 1.0e12f);
+	const float min_lat = p_filters.get("min_abs_latitude_deg", 0.0f);
+	const float max_lat = p_filters.get("max_abs_latitude_deg", 90.0f);
+	const float min_spacing = p_filters.get("min_spacing_m", 0.0f);
+	const int max_attempts = p_filters.get("max_attempts", p_count * 20);
+	const float min_spacing_sq = min_spacing * min_spacing;
+
+	Ref<RandomNumberGenerator> rng;
+	rng.instantiate();
+	rng->set_seed((uint64_t)p_seed);
+
+	LocalVector<Vector3> accepted;
+	accepted.reserve(p_count);
+
+	int attempts = 0;
+	while (out.size() < p_count && attempts < max_attempts) {
+		attempts++;
+
+		// Uniform direction on the sphere: normalized gaussian triple.
+		Vector3 d(rng->randfn(), rng->randfn(), rng->randfn());
+		if (d.length_squared() < 1e-8f) {
+			continue;
+		}
+		d = d.normalized();
+
+		const float abs_lat_deg = Math::abs(Math::rad_to_deg(Math::asin(CLAMP(d.y, -1.0f, 1.0f))));
+		if (abs_lat_deg < min_lat || abs_lat_deg > max_lat) {
+			continue;
+		}
+
+		EdenPlanetGenerator::SurfaceSample s;
+		if (!gen->sample_surface(d, s)) {
+			break; // generator not set up — no point burning the budget
+		}
+		if (land_only && s.is_ocean) {
+			continue;
+		}
+		if (s.height < min_height || s.height > max_height) {
+			continue;
+		}
+		const int adr_biome = _map_biome_to_adr(s.biome);
+		if (!biomes.is_empty() && !biomes.has(adr_biome)) {
+			continue;
+		}
+
+		const Vector3 pos = center + d * (radius + s.height);
+		if (min_spacing > 0.0f) {
+			// ponytail: O(n²) pairwise check — fine for POI/spawn counts (tens to
+			// hundreds); switch to a spatial hash if scatter counts reach 10k+.
+			bool too_close = false;
+			for (uint32_t i = 0; i < accepted.size(); ++i) {
+				if (accepted[i].distance_squared_to(pos) < min_spacing_sq) {
+					too_close = true;
+					break;
+				}
+			}
+			if (too_close) {
+				continue;
+			}
+		}
+		accepted.push_back(pos);
+
+		Dictionary pt;
+		pt["position"] = pos;
+		pt["direction"] = d;
+		pt["height"] = s.height;
+		pt["temperature"] = s.temperature01;
+		pt["rainfall"] = s.rainfall01;
+		pt["biome_type"] = adr_biome;
+		pt["is_ocean"] = s.is_ocean;
+		out.push_back(pt);
+	}
+	return out;
+}
+
 Ref<WorldConstants> WorldDataModule::get_world_constants() const {
 	Ref<WorldConstants> wc;
 	wc.instantiate();
@@ -276,5 +371,7 @@ void WorldDataModule::_bind_methods() {
 			&WorldDataModule::write_ewd_header);
 	ClassDB::bind_method(D_METHOD("load_world", "world_id", "planet_radius"), &WorldDataModule::load_world);
 	ClassDB::bind_method(D_METHOD("get_surface_data_at", "pos"), &WorldDataModule::get_surface_data_at);
+	ClassDB::bind_method(D_METHOD("scatter_surface_points", "seed", "count", "filters"),
+			&WorldDataModule::scatter_surface_points, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_world_constants"), &WorldDataModule::get_world_constants);
 }

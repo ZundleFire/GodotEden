@@ -116,6 +116,19 @@ public:
 	//   var sd = module.get_surface_data_at(global_position)
 	Ref<SurfaceData> get_surface_data_at(const Vector3 &p_pos) const;
 
+	// Deterministic filtered surface scatter for POI / spawn-node / fauna
+	// placement (docs/biome-content-pipeline.md). Same seed → same points.
+	// Filter keys (all optional): biomes: Array[int] (ADR BiomeType),
+	// land_only: bool, min_height / max_height: float,
+	// min_abs_latitude_deg / max_abs_latitude_deg: float, min_spacing_m: float,
+	// max_attempts: int (default count * 20). Returns Array of Dictionaries
+	// {position, direction, height, temperature, rainfall, biome_type, is_ocean};
+	// may return fewer than count when the attempt budget runs out.
+	// Example (spawn GDD §3.2 equatorial no-spawn band):
+	//   var pts = module.scatter_surface_points(seed, 9,
+	//       {"land_only": true, "min_abs_latitude_deg": 10.0, "min_spacing_m": 500000.0})
+	Array scatter_surface_points(int64_t p_seed, int p_count, const Dictionary &p_filters) const;
+
 	// World-scale constants from the loaded/written .ewd header.
 	Ref<WorldConstants> get_world_constants() const;
 
