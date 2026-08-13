@@ -9,8 +9,8 @@ def configure(env):
 def get_doc_classes():
     return [
         "EdenPlanetClimateProfile",
-        "EdenPlanetGenerator",
-        "EdenPlanetGeneratorV6Native",
+        "EdenPlanetGeneratorV1",
+        "EdenPlanetGeneratorV2",
         "PlanetTectonics",
     ]
 

@@ -1,4 +1,4 @@
-#include "eden_planet_generator.h"
+#include "eden_planet_generator_v1.h"
 #include "core/math/math_defs.h"
 #include "core/math/math_funcs.h"
 #include "modules/voxel/storage/voxel_buffer.h"
@@ -6,17 +6,17 @@
 
 using zylann::voxel::VoxelBuffer;
 
-EdenPlanetGenerator::EdenPlanetGenerator() {
+EdenPlanetGeneratorV1::EdenPlanetGeneratorV1() {
 }
 
-EdenPlanetGenerator::~EdenPlanetGenerator() {
+EdenPlanetGeneratorV1::~EdenPlanetGeneratorV1() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SETUP
 // ══════════════════════════════════════════════════════════════════════════════
 
-Ref<FastNoiseLite> EdenPlanetGenerator::_make_noise(int p_seed, int noise_type, float freq,
+Ref<FastNoiseLite> EdenPlanetGeneratorV1::_make_noise(int p_seed, int noise_type, float freq,
 		int octaves, float gain, float lacunarity, int fractal_type) {
 	Ref<FastNoiseLite> n;
 	n.instantiate();
@@ -33,7 +33,7 @@ Ref<FastNoiseLite> EdenPlanetGenerator::_make_noise(int p_seed, int noise_type, 
 	return n;
 }
 
-void EdenPlanetGenerator::setup() {
+void EdenPlanetGeneratorV1::setup() {
 	zylann::RWLockWrite wlock(_parameters_lock);
 
 	Parameters &p = _parameters;
@@ -41,7 +41,7 @@ void EdenPlanetGenerator::setup() {
 	// ── Tectonic plates ──────────────────────────────────────────────────
 	_tectonics.instantiate();
 
-	print_line(String("[EdenPlanetGenerator] setup() — mtn_falloff_start={0} end={1} sharpness={2}").format(
+	print_line(String("[EdenPlanetGeneratorV1] setup() — mtn_falloff_start={0} end={1} sharpness={2}").format(
 			varray(p.mountain_falloff_start, p.mountain_falloff_end, p.mountain_sharpness)));
 
 	Dictionary tect_params;
@@ -192,7 +192,7 @@ void EdenPlanetGenerator::setup() {
 	// Safe under the write lock: set_generator only stores the reference.
 	WorldDataModule *wdm = WorldDataModule::get_singleton();
 	if (wdm) {
-		wdm->set_generator(Ref<EdenPlanetGenerator>(this));
+		wdm->set_generator(Ref<EdenPlanetGeneratorV1>(this));
 	}
 }
 
@@ -200,7 +200,7 @@ void EdenPlanetGenerator::setup() {
 // GENERATE BLOCK — the complete SDF pipeline
 // ══════════════════════════════════════════════════════════════════════════════
 
-zylann::voxel::VoxelGenerator::Result EdenPlanetGenerator::generate_block(VoxelQueryData input) {
+zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(VoxelQueryData input) {
 	Result result;
 
 	Parameters params;
@@ -371,7 +371,7 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGenerator::generate_block(VoxelQ
 	return result;
 }
 
-EdenPlanetGenerator::SampleConsts EdenPlanetGenerator::_make_sample_consts(const Parameters &params) {
+EdenPlanetGeneratorV1::SampleConsts EdenPlanetGeneratorV1::_make_sample_consts(const Parameters &params) {
 	SampleConsts c;
 	c.alt_inner = -params.max_terrain_height - 500.0f;
 	c.alt_outer = params.max_terrain_height + 500.0f;
@@ -409,7 +409,7 @@ EdenPlanetGenerator::SampleConsts EdenPlanetGenerator::_make_sample_consts(const
 	return c;
 }
 
-EdenPlanetGenerator::VoxelCode EdenPlanetGenerator::_sample_voxel(float wx, float wy, float wz,
+EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, float wy, float wz,
 		const Parameters &params, const SampleNoises &n, const SampleConsts &c,
 		bool with_materials, VoxelSample &out) const {
 	const float INV_TAU = 1.0f / float(Math::TAU);
@@ -779,7 +779,7 @@ EdenPlanetGenerator::VoxelCode EdenPlanetGenerator::_sample_voxel(float wx, floa
 	}
 }
 
-int EdenPlanetGenerator::get_used_channels_mask() const {
+int EdenPlanetGeneratorV1::get_used_channels_mask() const {
 	return (1 << VoxelBuffer::CHANNEL_SDF) |
 		   (1 << VoxelBuffer::CHANNEL_INDICES) |
 		   (1 << VoxelBuffer::CHANNEL_WEIGHTS);
@@ -789,7 +789,7 @@ int EdenPlanetGenerator::get_used_channels_mask() const {
 // BILINEAR TECTONIC MAP SAMPLING
 // ══════════════════════════════════════════════════════════════════════════════
 
-float EdenPlanetGenerator::_sample_tect_map(const Vector<float> &map, float map_u, float map_v) const {
+float EdenPlanetGeneratorV1::_sample_tect_map(const Vector<float> &map, float map_u, float map_v) const {
 	const float fu = map_u * TECT_W - 0.5f;
 	const float fv = map_v * TECT_H - 0.5f;
 	const float flu = Math::floor(fu);
@@ -817,7 +817,7 @@ float EdenPlanetGenerator::_sample_tect_map(const Vector<float> &map, float map_
 // CLIMATE HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 
-float EdenPlanetGenerator::_temperature_fast(const Ref<FastNoiseLite> &climate_noise,
+float EdenPlanetGeneratorV1::_temperature_fast(const Ref<FastNoiseLite> &climate_noise,
 		float sx, float sy, float sz, float signed_lat, float lat, float alt, float cont,
 		const Parameters &p) const {
 	float temp_lat_start = MIN(p.temp_lat_falloff_start, p.temp_lat_falloff_end);
@@ -869,7 +869,7 @@ float EdenPlanetGenerator::_temperature_fast(const Ref<FastNoiseLite> &climate_n
 	return CLAMP((temp_c - p.polar_temperature) / temp_range, 0.0f, 1.0f);
 }
 
-float EdenPlanetGenerator::_moisture_fast(const Ref<FastNoiseLite> &climate_noise,
+float EdenPlanetGeneratorV1::_moisture_fast(const Ref<FastNoiseLite> &climate_noise,
 		float sx, float sy, float sz, float lat, float cont, float temp,
 		const Parameters &p) const {
 	const float belt_noise = climate_noise->get_noise_3d(
@@ -911,7 +911,7 @@ float EdenPlanetGenerator::_moisture_fast(const Ref<FastNoiseLite> &climate_nois
 	return CLAMP(base, 0.0f, 1.0f);
 }
 
-int EdenPlanetGenerator::_classify_biome_fast(float temp, float moist, float cont, float lat, float alt,
+int EdenPlanetGeneratorV1::_classify_biome_fast(float temp, float moist, float cont, float lat, float alt,
 		float climate_zone, float region_selector, float roll, const Parameters &p,
 		int &out_biome2, float &out_blend) const {
 	out_biome2 = BIOME_GRASSLAND;
@@ -1030,7 +1030,7 @@ int EdenPlanetGenerator::_classify_biome_fast(float temp, float moist, float con
 	return ids6[i1];
 }
 
-float EdenPlanetGenerator::_biome_detail_fast(float sx, float sy, float sz, int biome,
+float EdenPlanetGeneratorV1::_biome_detail_fast(float sx, float sy, float sz, int biome,
 		const Ref<FastNoiseLite> &hills_noise,
 		const Ref<FastNoiseLite> &desert_noise,
 		const Ref<FastNoiseLite> &forest_noise,
@@ -1049,7 +1049,7 @@ float EdenPlanetGenerator::_biome_detail_fast(float sx, float sy, float sz, int 
 	}
 }
 
-float EdenPlanetGenerator::_cave_carve(const Ref<FastNoiseLite> &cave_noise, float wx, float wy, float wz, float alt,
+float EdenPlanetGeneratorV1::_cave_carve(const Ref<FastNoiseLite> &cave_noise, float wx, float wy, float wz, float alt,
 		const Parameters &p) const {
 	if (alt > p.cave_max_altitude) return 0.0f;
 	float near = _ss(p.cave_fade_outer, p.cave_fade_inner, Math::abs(alt));
@@ -1062,7 +1062,7 @@ float EdenPlanetGenerator::_cave_carve(const Ref<FastNoiseLite> &cave_noise, flo
 // MATERIAL HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 
-int EdenPlanetGenerator::_land_material_for(int biome, float alt, float temp, float mtn,
+int EdenPlanetGeneratorV1::_land_material_for(int biome, float alt, float temp, float mtn,
 		const Parameters &p) const {
 	if (alt >= 0.0f && alt <= p.beach_width_m) {
 		return MAT_SAND;
@@ -1089,7 +1089,7 @@ int EdenPlanetGenerator::_land_material_for(int biome, float alt, float temp, fl
 	}
 }
 
-void EdenPlanetGenerator::_pack_mixel4(int land_mat, int ocean_mat, float cont,
+void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int ocean_mat, float cont,
 		float sand_start, float sand_end,
 		float ocean_start, float ocean_end,
 		int &r_indices, int &r_weights) {
@@ -1140,11 +1140,11 @@ void EdenPlanetGenerator::_pack_mixel4(int land_mat, int ocean_mat, float cont,
 // ACCESSORS
 // ══════════════════════════════════════════════════════════════════════════════
 
-Ref<PlanetTectonics> EdenPlanetGenerator::get_tectonics() const {
+Ref<PlanetTectonics> EdenPlanetGeneratorV1::get_tectonics() const {
 	return _tectonics;
 }
 
-void EdenPlanetGenerator::set_climate_profile(const Ref<EdenPlanetClimateProfile> &p_profile) {
+void EdenPlanetGeneratorV1::set_climate_profile(const Ref<EdenPlanetClimateProfile> &p_profile) {
 	Ref<EdenPlanetClimateProfile> old_profile;
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1152,20 +1152,20 @@ void EdenPlanetGenerator::set_climate_profile(const Ref<EdenPlanetClimateProfile
 		_climate_profile = p_profile;
 	}
 	if (old_profile.is_valid()) {
-		old_profile->disconnect("changed", callable_mp(this, &EdenPlanetGenerator::_on_climate_profile_changed));
+		old_profile->disconnect("changed", callable_mp(this, &EdenPlanetGeneratorV1::_on_climate_profile_changed));
 	}
 	if (p_profile.is_valid()) {
-		p_profile->connect("changed", callable_mp(this, &EdenPlanetGenerator::_on_climate_profile_changed));
+		p_profile->connect("changed", callable_mp(this, &EdenPlanetGeneratorV1::_on_climate_profile_changed));
 	}
 	emit_changed();
 }
 
-Ref<EdenPlanetClimateProfile> EdenPlanetGenerator::get_climate_profile() const {
+Ref<EdenPlanetClimateProfile> EdenPlanetGeneratorV1::get_climate_profile() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _climate_profile;
 }
 
-void EdenPlanetGenerator::_apply_climate_profile(Parameters &p, const Ref<EdenPlanetClimateProfile> &profile) const {
+void EdenPlanetGeneratorV1::_apply_climate_profile(Parameters &p, const Ref<EdenPlanetClimateProfile> &profile) const {
 	if (profile.is_null()) {
 		return;
 	}
@@ -1209,11 +1209,11 @@ void EdenPlanetGenerator::_apply_climate_profile(Parameters &p, const Ref<EdenPl
 					 .normalized();
 }
 
-void EdenPlanetGenerator::_on_climate_profile_changed() {
+void EdenPlanetGeneratorV1::_on_climate_profile_changed() {
 	emit_changed();
 }
 
-void EdenPlanetGenerator::set_land_coverage(float v) {
+void EdenPlanetGeneratorV1::set_land_coverage(float v) {
 	v = CLAMP(v, 0.0f, 1.0f);
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1224,12 +1224,12 @@ void EdenPlanetGenerator::set_land_coverage(float v) {
 	emit_changed();
 }
 
-float EdenPlanetGenerator::get_land_coverage() const {
+float EdenPlanetGeneratorV1::get_land_coverage() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _parameters.land_coverage;
 }
 
-void EdenPlanetGenerator::set_continent_size(float v) {
+void EdenPlanetGeneratorV1::set_continent_size(float v) {
 	v = CLAMP(v, 0.0f, 1.0f);
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1243,12 +1243,12 @@ void EdenPlanetGenerator::set_continent_size(float v) {
 	emit_changed();
 }
 
-float EdenPlanetGenerator::get_continent_size() const {
+float EdenPlanetGeneratorV1::get_continent_size() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _parameters.continent_size;
 }
 
-void EdenPlanetGenerator::set_biome_patch_size(float v) {
+void EdenPlanetGeneratorV1::set_biome_patch_size(float v) {
 	v = CLAMP(v, 0.0f, 1.0f);
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1260,12 +1260,12 @@ void EdenPlanetGenerator::set_biome_patch_size(float v) {
 	emit_changed();
 }
 
-float EdenPlanetGenerator::get_biome_patch_size() const {
+float EdenPlanetGeneratorV1::get_biome_patch_size() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _parameters.biome_patch_size;
 }
 
-void EdenPlanetGenerator::set_biome_patch_strength(float v) {
+void EdenPlanetGeneratorV1::set_biome_patch_strength(float v) {
 	v = CLAMP(v, 0.0f, 1.0f);
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1275,12 +1275,12 @@ void EdenPlanetGenerator::set_biome_patch_strength(float v) {
 	emit_changed();
 }
 
-float EdenPlanetGenerator::get_biome_patch_strength() const {
+float EdenPlanetGeneratorV1::get_biome_patch_strength() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _parameters.biome_patch_strength;
 }
 
-void EdenPlanetGenerator::set_terrain_variation(float v) {
+void EdenPlanetGeneratorV1::set_terrain_variation(float v) {
 	v = CLAMP(v, 0.0f, 1.0f);
 	{
 		zylann::RWLockWrite wlock(_parameters_lock);
@@ -1291,7 +1291,7 @@ void EdenPlanetGenerator::set_terrain_variation(float v) {
 	emit_changed();
 }
 
-float EdenPlanetGenerator::get_terrain_variation() const {
+float EdenPlanetGeneratorV1::get_terrain_variation() const {
 	zylann::RWLockRead rlock(_parameters_lock);
 	return _parameters.terrain_variation;
 }
@@ -1300,40 +1300,40 @@ float EdenPlanetGenerator::get_terrain_variation() const {
 // emit_changed() is called outside the lock so the editor / Resource system
 // knows the resource was modified (inspector dirty flag, undo-redo, etc.).
 #define EDEN_FLOAT_PROP(name) \
-	void EdenPlanetGenerator::set_##name(float v) { \
+	void EdenPlanetGeneratorV1::set_##name(float v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
 		} \
 		emit_changed(); \
 	} \
-	float EdenPlanetGenerator::get_##name() const { \
+	float EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define EDEN_INT_PROP(name) \
-	void EdenPlanetGenerator::set_##name(int v) { \
+	void EdenPlanetGeneratorV1::set_##name(int v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
 		} \
 		emit_changed(); \
 	} \
-	int EdenPlanetGenerator::get_##name() const { \
+	int EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define EDEN_BOOL_PROP(name) \
-	void EdenPlanetGenerator::set_##name(bool v) { \
+	void EdenPlanetGeneratorV1::set_##name(bool v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
 		} \
 		emit_changed(); \
 	} \
-	bool EdenPlanetGenerator::get_##name() const { \
+	bool EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
@@ -1342,7 +1342,7 @@ float EdenPlanetGenerator::get_terrain_variation() const {
 // generate_block(). Use for params that affect noise creation, tectonics,
 // or tectonic map baking.
 #define EDEN_FLOAT_PROP_SETUP(name) \
-	void EdenPlanetGenerator::set_##name(float v) { \
+	void EdenPlanetGeneratorV1::set_##name(float v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
@@ -1350,13 +1350,13 @@ float EdenPlanetGenerator::get_terrain_variation() const {
 		} \
 		emit_changed(); \
 	} \
-	float EdenPlanetGenerator::get_##name() const { \
+	float EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define EDEN_INT_PROP_SETUP(name) \
-	void EdenPlanetGenerator::set_##name(int v) { \
+	void EdenPlanetGeneratorV1::set_##name(int v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
@@ -1364,13 +1364,13 @@ float EdenPlanetGenerator::get_terrain_variation() const {
 		} \
 		emit_changed(); \
 	} \
-	int EdenPlanetGenerator::get_##name() const { \
+	int EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define EDEN_BOOL_PROP_SETUP(name) \
-	void EdenPlanetGenerator::set_##name(bool v) { \
+	void EdenPlanetGeneratorV1::set_##name(bool v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
@@ -1378,7 +1378,7 @@ float EdenPlanetGenerator::get_terrain_variation() const {
 		} \
 		emit_changed(); \
 	} \
-	bool EdenPlanetGenerator::get_##name() const { \
+	bool EdenPlanetGeneratorV1::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
@@ -1576,22 +1576,22 @@ EDEN_INT_PROP_SETUP(cave_fractal_type)
 
 // Macro for binding a float property with a group.
 #define BIND_FLOAT(name, hint_str) \
-	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGenerator::set_##name); \
-	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGenerator::get_##name);
+	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV1::set_##name); \
+	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV1::get_##name);
 
 #define BIND_INT(name) \
-	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGenerator::set_##name); \
-	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGenerator::get_##name);
+	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV1::set_##name); \
+	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV1::get_##name);
 
 #define BIND_BOOL(name) \
-	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGenerator::set_##name); \
-	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGenerator::get_##name);
+	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV1::set_##name); \
+	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV1::get_##name);
 
-void EdenPlanetGenerator::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("setup"), &EdenPlanetGenerator::setup);
-	ClassDB::bind_method(D_METHOD("get_tectonics"), &EdenPlanetGenerator::get_tectonics);
-	ClassDB::bind_method(D_METHOD("set_climate_profile", "profile"), &EdenPlanetGenerator::set_climate_profile);
-	ClassDB::bind_method(D_METHOD("get_climate_profile"), &EdenPlanetGenerator::get_climate_profile);
+void EdenPlanetGeneratorV1::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("setup"), &EdenPlanetGeneratorV1::setup);
+	ClassDB::bind_method(D_METHOD("get_tectonics"), &EdenPlanetGeneratorV1::get_tectonics);
+	ClassDB::bind_method(D_METHOD("set_climate_profile", "profile"), &EdenPlanetGeneratorV1::set_climate_profile);
+	ClassDB::bind_method(D_METHOD("get_climate_profile"), &EdenPlanetGeneratorV1::get_climate_profile);
 
 	// Planet core
 	BIND_FLOAT(planet_radius, "");
@@ -2066,7 +2066,7 @@ void EdenPlanetGenerator::_bind_methods() {
 // SURFACE QUERY — per-position sampling for WorldDataModule (ADR-0005)
 // ══════════════════════════════════════════════════════════════════════════════
 
-bool EdenPlanetGenerator::sample_surface(const Vector3 &dir, SurfaceSample &out) const {
+bool EdenPlanetGeneratorV1::sample_surface(const Vector3 &dir, SurfaceSample &out) const {
 	Parameters params;
 	Ref<EdenPlanetClimateProfile> climate_profile;
 	// Vector<> is copy-on-write — these copies are cheap and keep the maps alive

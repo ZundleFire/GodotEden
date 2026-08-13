@@ -12,7 +12,7 @@
 // per-direction terrain data queries.
 //
 // GDCLASS(PlanetTectonics, RefCounted) so it can be exposed to GDScript for
-// debugging, but the primary consumer is EdenPlanetGenerator (C++).
+// debugging, but the primary consumer is EdenPlanetGeneratorV1 (C++).
 //
 // Thread-safe: all data is read-only after generate(). Multiple threads can
 // call get_terrain_data() simultaneously.

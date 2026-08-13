@@ -1,9 +1,8 @@
 #include "register_types.h"
 #include "core/config/engine.h"
 #include "eden_planet_climate_profile.h"
-#include "eden_planet_generator.h"
-#include "eden_planet_generator_clean.h"
-#include "eden_planet_generator_v6_native.h"
+#include "eden_planet_generator_v1.h"
+#include "eden_planet_generator_v2.h"
 #include "planet_tectonics.h"
 #include "world_data_module.h"
 
@@ -12,9 +11,11 @@ static WorldDataModule *world_data_module = nullptr;
 void initialize_eden_planet_gen_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_CLASS(EdenPlanetClimateProfile);
-		GDREGISTER_CLASS(EdenPlanetGenerator);
-		GDREGISTER_CLASS(EdenPlanetGeneratorClean);
-		GDREGISTER_CLASS(EdenPlanetGeneratorV6Native);
+		// V1: tectonics + climate + biomes + oceans + caves. The only variant with caves.
+		GDREGISTER_CLASS(EdenPlanetGeneratorV1);
+		// V2: same tectonics/climate pipeline, newer per-plate biome-region system, no caves.
+		// Prefer this one unless you need caves (see each class's own doc comment).
+		GDREGISTER_CLASS(EdenPlanetGeneratorV2);
 		GDREGISTER_CLASS(PlanetTectonics);
 		GDREGISTER_CLASS(SurfaceData);
 		GDREGISTER_CLASS(WorldConstants);

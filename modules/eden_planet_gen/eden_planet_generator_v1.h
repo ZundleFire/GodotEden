@@ -1,5 +1,5 @@
-#ifndef EDEN_PLANET_GENERATOR_H
-#define EDEN_PLANET_GENERATOR_H
+#ifndef EDEN_PLANET_GENERATOR_V1_H
+#define EDEN_PLANET_GENERATOR_V1_H
 
 #include "modules/noise/fastnoise_lite.h"
 #include "modules/voxel/generators/voxel_generator.h"
@@ -8,7 +8,11 @@
 #include "eden_planet_climate_profile.h"
 #include "planet_tectonics.h"
 
-// C++ planet generator replacing Eden_VoxelPlanetGen_Biomes_V1.gd (866 lines).
+// First-generation native planet generator: C++ port replacing the original
+// Eden_VoxelPlanetGen_Biomes_V1.gd (866 lines) prototype. Tectonics + climate + biomes +
+// oceans + CAVES (see set_enable_caves) -- the only one of this module's two generator
+// variants with cave support. EdenPlanetGeneratorV2 has a newer, finer per-plate biome-region
+// system but drops caves entirely; prefer V1 specifically when you need caves, V2 otherwise.
 //
 // Extends VoxelGenerator directly (not VoxelGeneratorScript) so that
 // generate_block() runs on the voxel engine's background worker threads.
@@ -18,8 +22,8 @@
 // Thread safety: setup() acquires a write lock, generate_block() acquires a
 // read lock. Multiple worker threads can generate blocks simultaneously.
 
-class EdenPlanetGenerator : public zylann::voxel::VoxelGenerator {
-	GDCLASS(EdenPlanetGenerator, zylann::voxel::VoxelGenerator);
+class EdenPlanetGeneratorV1 : public zylann::voxel::VoxelGenerator {
+	GDCLASS(EdenPlanetGeneratorV1, zylann::voxel::VoxelGenerator);
 
 public:
 	// Biome IDs (Whittaker classification).
@@ -42,8 +46,8 @@ public:
 	static const int MAT_MOSS = 5;
 	static const int MAT_OCEAN_FLOOR = 6;
 
-	EdenPlanetGenerator();
-	~EdenPlanetGenerator();
+	EdenPlanetGeneratorV1();
+	~EdenPlanetGeneratorV1();
 
 	// Result of a per-position surface query (consumed by WorldDataModule — ADR-0005).
 	struct SurfaceSample {
@@ -750,4 +754,4 @@ private:
 	void _on_climate_profile_changed();
 };
 
-#endif // EDEN_PLANET_GENERATOR_H
+#endif // EDEN_PLANET_GENERATOR_V1_H

@@ -5,7 +5,7 @@
 #include "core/object/ref_counted.h"
 #include "core/os/mutex.h"
 
-class EdenPlanetGenerator;
+class EdenPlanetGeneratorV1;
 
 // ADR-0005: World Data Storage and Runtime Query.
 // SurfaceData / WorldConstants are the GDScript-visible result types;
@@ -70,7 +70,7 @@ protected:
 
 // Engine singleton owning runtime world-data queries and .ewd persistence.
 // Not a scene node — registered via Engine::add_singleton in register_types.cpp.
-// The active EdenPlanetGenerator auto-wires itself here from setup(); tests and
+// The active EdenPlanetGeneratorV1 auto-wires itself here from setup(); tests and
 // tools may inject one explicitly with set_generator().
 //
 // Thread safety: all public methods lock an internal mutex around shared state;
@@ -86,9 +86,9 @@ public:
 	~WorldDataModule();
 
 	// The generator used to answer surface queries. Auto-set by
-	// EdenPlanetGenerator::setup(); last setup() wins.
-	void set_generator(const Ref<EdenPlanetGenerator> &p_generator);
-	Ref<EdenPlanetGenerator> get_generator() const;
+	// EdenPlanetGeneratorV1::setup(); last setup() wins.
+	void set_generator(const Ref<EdenPlanetGeneratorV1> &p_generator);
+	Ref<EdenPlanetGeneratorV1> get_generator() const;
 
 	// ADR-0001: planet center must come from the registered GravityBody3D —
 	// game code sets this at world load. Defaults to origin.
@@ -141,7 +141,7 @@ private:
 	String _ewd_path(const String &p_world_id) const;
 
 	mutable Mutex _mutex;
-	Ref<EdenPlanetGenerator> _generator;
+	Ref<EdenPlanetGeneratorV1> _generator;
 	Vector3 _planet_center;
 	float _planet_radius = 0.0f;
 	String _worlds_dir = "user://worlds";

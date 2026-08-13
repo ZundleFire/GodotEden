@@ -6,7 +6,7 @@
 
 // Fibonacci-lattice Voronoi diagram on a unit sphere with cubemap spatial grid
 // acceleration. NOT a Godot class — plain C++ used internally by PlanetTectonics
-// and EdenPlanetGenerator.
+// and EdenPlanetGeneratorV1.
 //
 // Port of: Projects/planet-voxels/Scripts/planet/voronoi_sphere.gd
 

@@ -3,7 +3,7 @@
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/math/random_number_generator.h"
-#include "eden_planet_generator.h"
+#include "eden_planet_generator_v1.h"
 
 // ── SurfaceData ──────────────────────────────────────────────────────────────
 
@@ -64,12 +64,12 @@ WorldDataModule::~WorldDataModule() {
 	}
 }
 
-void WorldDataModule::set_generator(const Ref<EdenPlanetGenerator> &p_generator) {
+void WorldDataModule::set_generator(const Ref<EdenPlanetGeneratorV1> &p_generator) {
 	MutexLock lock(_mutex);
 	_generator = p_generator;
 }
 
-Ref<EdenPlanetGenerator> WorldDataModule::get_generator() const {
+Ref<EdenPlanetGeneratorV1> WorldDataModule::get_generator() const {
 	MutexLock lock(_mutex);
 	return _generator;
 }
@@ -199,24 +199,24 @@ Error WorldDataModule::load_world(const String &p_world_id, float p_planet_radiu
 	return OK;
 }
 
-// Internal Whittaker biome (EdenPlanetGenerator::Biome) → ADR-0005 BiomeType int.
+// Internal Whittaker biome (EdenPlanetGeneratorV1::Biome) → ADR-0005 BiomeType int.
 // Approximate by design: BiomeClassifier (GDScript) remains the authority and
 // classifies from temperature/rainfall; this field is a convenience/debug hint.
 static int _map_biome_to_adr(int p_internal) {
 	switch (p_internal) {
-		case EdenPlanetGenerator::BIOME_OCEAN:
+		case EdenPlanetGeneratorV1::BIOME_OCEAN:
 			return 9; // OCEAN
-		case EdenPlanetGenerator::BIOME_TUNDRA:
+		case EdenPlanetGeneratorV1::BIOME_TUNDRA:
 			return 8; // TUNDRA
-		case EdenPlanetGenerator::BIOME_GRASSLAND:
+		case EdenPlanetGeneratorV1::BIOME_GRASSLAND:
 			return 4; // TEMPERATE_GRASSLAND
-		case EdenPlanetGenerator::BIOME_FOREST:
+		case EdenPlanetGeneratorV1::BIOME_FOREST:
 			return 3; // TEMPERATE_RAINFOREST
-		case EdenPlanetGenerator::BIOME_TROPICAL:
+		case EdenPlanetGeneratorV1::BIOME_TROPICAL:
 			return 0; // TROPICAL_RAINFOREST
-		case EdenPlanetGenerator::BIOME_DESERT:
+		case EdenPlanetGeneratorV1::BIOME_DESERT:
 			return 2; // HOT_DESERT
-		case EdenPlanetGenerator::BIOME_HILLS_MEADOWS:
+		case EdenPlanetGeneratorV1::BIOME_HILLS_MEADOWS:
 			return 5; // SHRUBLAND
 		default:
 			return 10; // UNKNOWN
@@ -227,7 +227,7 @@ Ref<SurfaceData> WorldDataModule::get_surface_data_at(const Vector3 &p_pos) cons
 	Ref<SurfaceData> sd;
 	sd.instantiate();
 
-	Ref<EdenPlanetGenerator> gen;
+	Ref<EdenPlanetGeneratorV1> gen;
 	Vector3 center;
 	{
 		MutexLock lock(_mutex);
@@ -235,9 +235,9 @@ Ref<SurfaceData> WorldDataModule::get_surface_data_at(const Vector3 &p_pos) cons
 		center = _planet_center;
 	}
 	ERR_FAIL_COND_V_MSG(gen.is_null(), sd,
-			"WorldDataModule: no generator wired — call EdenPlanetGenerator.setup() first");
+			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() first");
 
-	EdenPlanetGenerator::SurfaceSample s;
+	EdenPlanetGeneratorV1::SurfaceSample s;
 	if (!gen->sample_surface(p_pos - center, s)) {
 		return sd; // setup() not completed — defaults (UNKNOWN biome)
 	}
@@ -259,7 +259,7 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 	Array out;
 	ERR_FAIL_COND_V(p_count <= 0, out);
 
-	Ref<EdenPlanetGenerator> gen;
+	Ref<EdenPlanetGeneratorV1> gen;
 	Vector3 center;
 	{
 		MutexLock lock(_mutex);
@@ -267,7 +267,7 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 		center = _planet_center;
 	}
 	ERR_FAIL_COND_V_MSG(gen.is_null(), out,
-			"WorldDataModule: no generator wired — call EdenPlanetGenerator.setup() first");
+			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() first");
 	const float radius = gen->get_planet_radius();
 
 	// Filters (all optional).
@@ -304,7 +304,7 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 			continue;
 		}
 
-		EdenPlanetGenerator::SurfaceSample s;
+		EdenPlanetGeneratorV1::SurfaceSample s;
 		if (!gen->sample_surface(d, s)) {
 			break; // generator not set up — no point burning the budget
 		}

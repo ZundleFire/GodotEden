@@ -1,4 +1,4 @@
-#include "eden_planet_generator_v6_native.h"
+#include "eden_planet_generator_v2.h"
 
 #include <cstring>
 
@@ -194,13 +194,13 @@ inline void _sample_region_preference(const Ref<PlanetTectonics> &p_tectonics,
 }
 } // namespace
 
-EdenPlanetGeneratorV6Native::EdenPlanetGeneratorV6Native() {
+EdenPlanetGeneratorV2::EdenPlanetGeneratorV2() {
 }
 
-EdenPlanetGeneratorV6Native::~EdenPlanetGeneratorV6Native() {
+EdenPlanetGeneratorV2::~EdenPlanetGeneratorV2() {
 }
 
-Ref<FastNoiseLite> EdenPlanetGeneratorV6Native::_make_noise(int p_seed, float p_freq, int p_octaves, float p_gain, float p_lacunarity,
+Ref<FastNoiseLite> EdenPlanetGeneratorV2::_make_noise(int p_seed, float p_freq, int p_octaves, float p_gain, float p_lacunarity,
 		int p_noise_type, int p_fractal_type) {
 	Ref<FastNoiseLite> n;
 	n.instantiate();
@@ -214,7 +214,7 @@ Ref<FastNoiseLite> EdenPlanetGeneratorV6Native::_make_noise(int p_seed, float p_
 	return n;
 }
 
-void EdenPlanetGeneratorV6Native::setup() {
+void EdenPlanetGeneratorV2::setup() {
 	zylann::RWLockWrite wlock(_parameters_lock);
 	Parameters &p = _parameters;
 
@@ -238,7 +238,7 @@ void EdenPlanetGeneratorV6Native::setup() {
 	p.is_setup = true;
 }
 
-void EdenPlanetGeneratorV6Native::_build_biome_regions(const Parameters &p) {
+void EdenPlanetGeneratorV2::_build_biome_regions(const Parameters &p) {
 	_biome_point_region_id.clear();
 	_biome_region_kind.clear();
 	_biome_region_strength.clear();
@@ -447,7 +447,7 @@ void EdenPlanetGeneratorV6Native::_build_biome_regions(const Parameters &p) {
 	}
 }
 
-Dictionary EdenPlanetGeneratorV6Native::get_biome_region_stats() const {
+Dictionary EdenPlanetGeneratorV2::get_biome_region_stats() const {
 	Dictionary stats;
 	zylann::RWLockRead rlock(_parameters_lock);
 	stats["region_count"] = _biome_region_kind.size();
@@ -490,7 +490,7 @@ Dictionary EdenPlanetGeneratorV6Native::get_biome_region_stats() const {
 	return stats;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::generate_biome_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::generate_biome_debug_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -804,11 +804,11 @@ Ref<Image> EdenPlanetGeneratorV6Native::generate_biome_debug_image(int p_width, 
 	return img;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_biome_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_biome_debug_image(int p_width, int p_height) {
 	return generate_biome_debug_image(p_width, p_height);
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_plate_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_plate_debug_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -861,7 +861,7 @@ Ref<Image> EdenPlanetGeneratorV6Native::get_plate_debug_image(int p_width, int p
 	return img;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_plate_data_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_plate_data_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -933,7 +933,7 @@ Ref<Image> EdenPlanetGeneratorV6Native::get_plate_data_image(int p_width, int p_
 	return img;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_macro_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_macro_debug_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -1074,7 +1074,7 @@ Ref<Image> EdenPlanetGeneratorV6Native::get_macro_debug_image(int p_width, int p
 	return img;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_climate_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_climate_debug_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -1180,7 +1180,7 @@ Ref<Image> EdenPlanetGeneratorV6Native::get_climate_debug_image(int p_width, int
 	return img;
 }
 
-Ref<Image> EdenPlanetGeneratorV6Native::get_topology_cell_debug_image(int p_width, int p_height) {
+Ref<Image> EdenPlanetGeneratorV2::get_topology_cell_debug_image(int p_width, int p_height) {
 	if (p_width <= 0 || p_height <= 0) {
 		return Ref<Image>();
 	}
@@ -1239,7 +1239,7 @@ Ref<Image> EdenPlanetGeneratorV6Native::get_topology_cell_debug_image(int p_widt
 	return img;
 }
 
-zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV6Native::generate_block(VoxelQueryData input) {
+zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV2::generate_block(VoxelQueryData input) {
 	Result result;
 
 	Parameters params;
@@ -1599,13 +1599,13 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV6Native::generate_bloc
 	return result;
 }
 
-int EdenPlanetGeneratorV6Native::get_used_channels_mask() const {
+int EdenPlanetGeneratorV2::get_used_channels_mask() const {
 	return (1 << VoxelBuffer::CHANNEL_SDF) |
 				(1 << VoxelBuffer::CHANNEL_INDICES) |
 				(1 << VoxelBuffer::CHANNEL_WEIGHTS);
 }
 
-void EdenPlanetGeneratorV6Native::_pack_mixel4(int land_mat, int ocean_mat, float transition,
+void EdenPlanetGeneratorV2::_pack_mixel4(int land_mat, int ocean_mat, float transition,
 		float sand_start, float sand_end,
 		float ocean_start, float ocean_end,
 		int &r_indices, int &r_weights) {
@@ -1665,20 +1665,20 @@ void EdenPlanetGeneratorV6Native::_pack_mixel4(int land_mat, int ocean_mat, floa
 }
 
 #define V6_NATIVE_FLOAT_PROP(name) \
-	void EdenPlanetGeneratorV6Native::set_##name(float v) { \
+	void EdenPlanetGeneratorV2::set_##name(float v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
 		} \
 		emit_changed(); \
 	} \
-	float EdenPlanetGeneratorV6Native::get_##name() const { \
+	float EdenPlanetGeneratorV2::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define V6_NATIVE_FLOAT_PROP_SETUP(name) \
-	void EdenPlanetGeneratorV6Native::set_##name(float v) { \
+	void EdenPlanetGeneratorV2::set_##name(float v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
@@ -1686,13 +1686,13 @@ void EdenPlanetGeneratorV6Native::_pack_mixel4(int land_mat, int ocean_mat, floa
 		} \
 		emit_changed(); \
 	} \
-	float EdenPlanetGeneratorV6Native::get_##name() const { \
+	float EdenPlanetGeneratorV2::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
 
 #define V6_NATIVE_INT_PROP_SETUP(name) \
-	void EdenPlanetGeneratorV6Native::set_##name(int v) { \
+	void EdenPlanetGeneratorV2::set_##name(int v) { \
 		{ \
 			zylann::RWLockWrite wlock(_parameters_lock); \
 			_parameters.name = v; \
@@ -1700,7 +1700,7 @@ void EdenPlanetGeneratorV6Native::_pack_mixel4(int land_mat, int ocean_mat, floa
 		} \
 		emit_changed(); \
 	} \
-	int EdenPlanetGeneratorV6Native::get_##name() const { \
+	int EdenPlanetGeneratorV2::get_##name() const { \
 		zylann::RWLockRead rlock(_parameters_lock); \
 		return _parameters.name; \
 	}
@@ -1755,23 +1755,23 @@ V6_NATIVE_FLOAT_PROP(beach_width_m)
 #undef V6_NATIVE_INT_PROP_SETUP
 
 #define BIND_FLOAT(name) \
-	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV6Native::set_##name); \
-	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV6Native::get_##name);
+	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV2::set_##name); \
+	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV2::get_##name);
 
 #define BIND_INT(name) \
-	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV6Native::set_##name); \
-	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV6Native::get_##name);
+	ClassDB::bind_method(D_METHOD("set_" #name, "value"), &EdenPlanetGeneratorV2::set_##name); \
+	ClassDB::bind_method(D_METHOD("get_" #name), &EdenPlanetGeneratorV2::get_##name);
 
-void EdenPlanetGeneratorV6Native::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("setup"), &EdenPlanetGeneratorV6Native::setup);
-	ClassDB::bind_method(D_METHOD("generate_biome_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::generate_biome_debug_image, DEFVAL(256), DEFVAL(128));
-	ClassDB::bind_method(D_METHOD("get_biome_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_biome_debug_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_plate_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_plate_debug_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_plate_data_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_plate_data_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_macro_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_macro_debug_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_climate_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_climate_debug_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_topology_cell_debug_image", "width", "height"), &EdenPlanetGeneratorV6Native::get_topology_cell_debug_image, DEFVAL(1024), DEFVAL(512));
-	ClassDB::bind_method(D_METHOD("get_biome_region_stats"), &EdenPlanetGeneratorV6Native::get_biome_region_stats);
+void EdenPlanetGeneratorV2::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("setup"), &EdenPlanetGeneratorV2::setup);
+	ClassDB::bind_method(D_METHOD("generate_biome_debug_image", "width", "height"), &EdenPlanetGeneratorV2::generate_biome_debug_image, DEFVAL(256), DEFVAL(128));
+	ClassDB::bind_method(D_METHOD("get_biome_debug_image", "width", "height"), &EdenPlanetGeneratorV2::get_biome_debug_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_plate_debug_image", "width", "height"), &EdenPlanetGeneratorV2::get_plate_debug_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_plate_data_image", "width", "height"), &EdenPlanetGeneratorV2::get_plate_data_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_macro_debug_image", "width", "height"), &EdenPlanetGeneratorV2::get_macro_debug_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_climate_debug_image", "width", "height"), &EdenPlanetGeneratorV2::get_climate_debug_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_topology_cell_debug_image", "width", "height"), &EdenPlanetGeneratorV2::get_topology_cell_debug_image, DEFVAL(1024), DEFVAL(512));
+	ClassDB::bind_method(D_METHOD("get_biome_region_stats"), &EdenPlanetGeneratorV2::get_biome_region_stats);
 
 	BIND_FLOAT(planet_radius);
 	BIND_INT(seed);

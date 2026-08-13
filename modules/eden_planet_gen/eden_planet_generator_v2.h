@@ -1,5 +1,5 @@
-#ifndef EDEN_PLANET_GENERATOR_V6_NATIVE_H
-#define EDEN_PLANET_GENERATOR_V6_NATIVE_H
+#ifndef EDEN_PLANET_GENERATOR_V2_H
+#define EDEN_PLANET_GENERATOR_V2_H
 
 #include "core/io/image.h"
 #include "modules/noise/fastnoise_lite.h"
@@ -8,10 +8,15 @@
 #include "modules/voxel/util/thread/rw_lock.h"
 #include "planet_tectonics.h"
 
-// Authoritative runtime planet generator path.
-// Keep biome/terrain tuning here first; the GDScript V6 resource is only a bridge/debug source.
-class EdenPlanetGeneratorV6Native : public zylann::voxel::VoxelGenerator {
-	GDCLASS(EdenPlanetGeneratorV6Native, zylann::voxel::VoxelGenerator);
+// Second-generation native planet generator (previously named "V6Native", after an older
+// GDScript prototype lineage this module doesn't otherwise contain -- renamed to fit the two
+// real C++ variants that exist here). Same tectonics/climate pipeline as
+// EdenPlanetGeneratorV1, with a finer per-plate biome-region system, but NO cave support
+// (see EdenPlanetGeneratorV1::set_enable_caves for that). Prefer this one unless you need
+// caves. Also has dedicated debug-image getters (get_biome_debug_image() etc.) for visual
+// tuning in-editor that V1 doesn't have.
+class EdenPlanetGeneratorV2 : public zylann::voxel::VoxelGenerator {
+	GDCLASS(EdenPlanetGeneratorV2, zylann::voxel::VoxelGenerator);
 
 public:
 	static const int MAT_GRASS = 0;
@@ -22,8 +27,8 @@ public:
 	static const int MAT_MOSS = 5;
 	static const int MAT_OCEAN_FLOOR = 6;
 
-	EdenPlanetGeneratorV6Native();
-	~EdenPlanetGeneratorV6Native();
+	EdenPlanetGeneratorV2();
+	~EdenPlanetGeneratorV2();
 
 	Result generate_block(VoxelQueryData input) override;
 	int get_used_channels_mask() const override;
@@ -213,4 +218,4 @@ private:
 			int &r_indices, int &r_weights);
 };
 
-#endif // EDEN_PLANET_GENERATOR_V6_NATIVE_H
+#endif // EDEN_PLANET_GENERATOR_V2_H
