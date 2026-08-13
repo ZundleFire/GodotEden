@@ -333,6 +333,28 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 				const float wx = float(origin.x) + x * step + half_step;
 
 				const VoxelCode code = _sample_voxel(wx, wy, wz, params, sn, sc, do_materials, vs);
+
+				// Bake ocean water directly into CHANNEL_DATA5 (== VoxelWaterSimulator::
+				// WATER_CHANNEL) for air voxels in oceanic columns at/below nominal sea level
+				// (alt <= 0, i.e. within the planet_radius shell). Without this, the generator
+				// only ever painted the SEABED ocean-floor-colored -- the water volume itself
+				// was just empty air, nothing a VoxelWaterSimulator could render or simulate.
+				// Seeding a whole ocean voxel-by-voxel via add_water() at runtime is exactly
+				// the cost this bake-at-generation-time path avoids (see VoxelWaterSimulator's
+				// own class doc comment on why baked water starts inert until activate_block()
+				// wakes it near actual activity). cont_transition (0=land, 1=ocean) is used
+				// rather than the full biome classification because most open-ocean voxels hit
+				// the cheaper VOXEL_EARLY_AIR path below, which never computes a biome at all.
+				auto bake_water_if_ocean = [&]() {
+					if (vs.sdf <= 0.0f || vs.cont_transition <= 0.5f) {
+						return;
+					}
+					const double r = Math::sqrt(double(wx) * wx + double(wy) * wy + double(wz) * wz);
+					if (float(r) - params.planet_radius <= 0.0f) {
+						buffer.set_voxel_f(1.0f, x, y, z, VoxelBuffer::CHANNEL_DATA5);
+					}
+				};
+
 				switch (code) {
 					case VOXEL_SKIP_AIR:
 						buffer.set_voxel_f(1.0f, x, y, z, VoxelBuffer::CHANNEL_SDF);
@@ -344,6 +366,7 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 						break;
 					case VOXEL_EARLY_AIR:
 						buffer.set_voxel_f(vs.sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
+						bake_water_if_ocean();
 						break;
 					case VOXEL_EARLY_SOLID:
 						buffer.set_voxel_f(vs.sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
@@ -362,6 +385,7 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 							buffer.set_voxel(sc.rock_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
 							buffer.set_voxel(sc.rock_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
 						}
+						bake_water_if_ocean();
 						break;
 				}
 			}
@@ -782,7 +806,8 @@ EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, 
 int EdenPlanetGeneratorV1::get_used_channels_mask() const {
 	return (1 << VoxelBuffer::CHANNEL_SDF) |
 		   (1 << VoxelBuffer::CHANNEL_INDICES) |
-		   (1 << VoxelBuffer::CHANNEL_WEIGHTS);
+		   (1 << VoxelBuffer::CHANNEL_WEIGHTS) |
+		   (1 << VoxelBuffer::CHANNEL_DATA5); // baked ocean water mass, see VOXEL_FULL below
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
