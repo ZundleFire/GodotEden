@@ -1,3 +1,4 @@
 [submodule "modules/voxel"]
 	path = modules/voxel
-	url = https://github.com/Zylann/godot_voxel
+	url = https://github.com/ZundleFire/godot_voxel
+	branch = eden/main
