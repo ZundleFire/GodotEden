@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+Import("env")
+Import("env_modules")
+
+import sys
+
+env_atmosphere = env_modules.Clone()
+
+# Embedded shaders. The header is generated at build time from shaders/*, so it rebuilds whenever
+# a shader or the generator changes and stays out of version control like every other *.gen.*
+# file in the engine.
+sys.path.insert(0, Dir(".").srcnode().abspath)
+import gen_shader_header
+
+shader_header = env_atmosphere.CommandNoCache(
+    "eden_atmosphere_shaders.gen.h",
+    Glob("shaders/*.gdshader") + Glob("shaders/*.gdshaderinc") + Glob("shaders/*.glsl") + ["gen_shader_header.py"],
+    env.Run(gen_shader_header.build),
+)
+
+module_sources = [
+    "register_types.cpp",
+    "eden_planet_atmosphere.cpp",
+    "eden_cloud_shell.cpp",
+    "eden_atmosphere_post_effect.cpp",
+]
+
+objects = []
+env_atmosphere.add_source_files(objects, module_sources)
+# Explicit, rather than trusting the include scanner to notice a header that does not exist yet
+# on a fresh clone.
+env_atmosphere.Depends(objects, shader_header)
+env.modules_sources += objects
