@@ -120,12 +120,6 @@ uniform float star_daylight_fade : hint_range(0.0, 400.0) = 80.0;
 // Final linear-space multiplier. The demos tonemap with ACES, so this stays HDR.
 uniform float exposure : hint_range(0.0, 8.0) = 1.0;
 
-// Viewport size in pixels, used to turn SCREEN_UV into pixel coordinates for the dither.
-// Must be a vec2: scaling both axes by one scalar makes the noise vary at different rates
-// horizontally and vertically, which smears the dither into visible horizontal streaks
-// instead of breaking up the bands. Sky shaders get no viewport-size built-in, so the
-// controller feeds it.
-uniform vec2 dither_resolution = vec2(1920.0, 1080.0);
 
 // Limb darkening exponent for the sun disc -- 0 is a flat disc, higher dims the rim.
 uniform float sun_limb_darkening : hint_range(0.0, 1.0) = 0.4;
@@ -503,7 +497,7 @@ void sky() {
 		// where banding cannot be seen anyway.
 		float jitter = AT_CUBEMAP_PASS
 				? 0.5
-				: interleaved_gradient_noise(SCREEN_UV * dither_resolution);
+				: interleaved_gradient_noise(FRAGCOORD.xy);
 		atmosphere_scatter(ro, rd, t_start, t_end, jitter, inscatter, transmittance);
 	}
 

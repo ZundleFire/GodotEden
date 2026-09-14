@@ -502,7 +502,14 @@ void fragment() {
 	// every cloud out to one pale grey. The sky colour is half desaturated first: at full saturation
 	// shadowed cloud is the same blue as the sky behind it and reads as a hole.
 	vec3 sky_fill = mix(vec3(dot(sky_ambient_color, vec3(0.3, 0.59, 0.11))), sky_ambient_color, 0.5);
-	vec3 shadow_tone = mix(sun_col * cloud_ambient, sky_fill * cloud_shadow_color * cloud_sky_ambient_gain, cloud_sky_ambient_mix);
+	// sky_ambient_color is ONE value: the sky straight up from the CAMERA, not from each cloud. From
+	// the ground camera and cloud share roughly the same sky, so that is a fine stand-in -- but from
+	// orbit one camera position sees clouds on both the day and night side at once, and without this
+	// they all took the same bright daytime fill regardless. Fading it by the cloud's OWN local sun
+	// elevation keeps it truthful there too; the night ambient term below covers what is left once
+	// this fades out.
+	float local_daylight = smoothstep(-0.3, 0.15, dot(mid_up, sun_direction));
+	vec3 shadow_tone = mix(sun_col * cloud_ambient, sky_fill * cloud_shadow_color * cloud_sky_ambient_gain * local_daylight, cloud_sky_ambient_mix);
 	vec3 glow_col = sun_col * forward_lobe * cloud_glow_strength;
 	// Moonlight: direction, facing, phase (a new moon lights nothing) and planet occlusion.
 	float moon_light = max(dot(mid_up, moon_direction), 0.0) * mix(cloud_backlit_floor, 1.0, 0.5 - 0.5 * dot(rd, moon_direction))

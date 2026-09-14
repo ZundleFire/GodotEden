@@ -1126,16 +1126,11 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 	_set_on_all(SNAME("parent_planet_texture_rotation"), Math::deg_to_rad(parent_planet_texture_rotation_deg));
 	_set_on_all(SNAME("parent_planet_band_time"), parent_planet_band_phase);
 
-	// Sky shaders get no viewport-size built-in, and the dither needs a vec2: scaling both axes
-	// by one scalar makes the noise vary at different rates per axis and smears it into streaks.
-	Vector2 res(1920, 1080);
-	if (is_inside_tree()) {
-		Viewport *vp = get_viewport();
-		if (vp != nullptr) {
-			res = vp->get_visible_rect().size;
-		}
-	}
-	_set_on_all(SNAME("dither_resolution"), res);
+	// (dither_resolution used to be pushed here for the sky's raymarch jitter. Removed: the sky
+	// shader now reads FRAGCOORD directly, which Godot's sky shader stage actually provides -- no
+	// CPU-guessed viewport size needed, and no risk of it disagreeing with whatever the sky is
+	// really rendering into (an editor sub-viewport, a differently-sized game window, ...), which
+	// was producing visible banding instead of the fine dither the jitter is meant to give.)
 
 	_bake_transmittance_lut();
 	_set_on_all(SNAME("transmittance_lut"), lut_texture);
