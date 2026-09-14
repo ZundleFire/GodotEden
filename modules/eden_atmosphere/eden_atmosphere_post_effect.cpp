@@ -15,7 +15,7 @@ static const char *CONTEXT_NAME = "eden_atmosphere";
 static const char *RAYS_TEXTURE = "light_rays";
 
 // Must match the Params block in shaders/atmosphere_post_common.glsl: 2 mat4 + 15 vec4.
-static const int PARAMS_FLOAT_COUNT = 16 * 2 + 4 * 15;
+static const int PARAMS_FLOAT_COUNT = 16 * 2 + 4 * 16;
 
 EdenAtmospherePostEffect::EdenAtmospherePostEffect() {
 	set_effect_callback_type(EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
@@ -239,6 +239,7 @@ void EdenAtmospherePostEffect::_render(int p_callback_type, const RenderData *p_
 	put_vec4(data, i, moon_uv.x, moon_uv.y, moon_w, fp.moon_ray_threshold);
 	put_vec3w(data, i, fp.moon_ray_tint, 0.0f);
 	put_vec4(data, i, (float)CLAMP(fp.ray_samples, 1, 128), fp.ray_density, fp.ray_decay, fp.ray_radius);
+	put_vec4(data, i, fp.ray_sky_boost, 0.0f, 0.0f, 0.0f);
 	ERR_FAIL_COND_MSG(i != PARAMS_FLOAT_COUNT, "EdenAtmospherePostEffect: params packing out of step with the shader block.");
 	rd->buffer_update(params_ubo, 0, PARAMS_FLOAT_COUNT * sizeof(float), data);
 

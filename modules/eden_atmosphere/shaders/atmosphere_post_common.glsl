@@ -23,6 +23,7 @@ layout(set = 0, binding = 3, std140) uniform Params {
 	vec4 light1_uv;      // moon: same layout
 	vec4 light1_col;
 	vec4 rays;           // x samples, y density (fraction of the way to the light), z decay, w emissive radius (uv)
+	vec4 ray_style;      // x sky boost (extra ray weight over fog/sky, scaled by local fog amount)
 } p;
 
 // Interleaved gradient noise: a static per-pixel dither that turns fixed-step sampling bands

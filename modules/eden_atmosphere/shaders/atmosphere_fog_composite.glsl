@@ -79,6 +79,8 @@ void main() {
 	vec2 uv = (vec2(px) + 0.5) / vec2(size);
 	vec4 color = imageLoad(color_image, px);
 	vec3 result = color.rgb;
+	// Set inside the fog block below when fog is enabled; stays 0 (no boost) otherwise.
+	float fog_amount_for_rays = 0.0;
 
 	if (p.fog_a.w > 0.5) {
 		float depth = texelFetch(depth_tex, px, 0).r;
@@ -109,6 +111,10 @@ void main() {
 
 		float tau = fog_optical_depth(ro, rd, scene_dist) * p.fog_a.x;
 		float amount = 1.0 - exp(-tau);
+		// Remembered before the sky-only scale-down just below, so the ray boost reflects the real
+		// depth of haze along this ray rather than the halved value used to avoid double-scattering
+		// the sky itself.
+		fog_amount_for_rays = amount;
 		if (sky) {
 			// The atmosphere already scatters light over the sky; full fog on top would double
 			// it. Partial affect keeps the horizon seam between fogged terrain and sky invisible.
@@ -126,6 +132,10 @@ void main() {
 	}
 
 	if (p.screen.w > 0.5) {
+		// Boost rays where they cross fog/haze, proportional to how much fog is actually there -- a
+		// light shaft slicing through mist, or the atmosphere glowing along the sun's direction, rather
+		// than a flat brightening of clear sky.
+		float sky_boost = 1.0 + fog_amount_for_rays * p.ray_style.x;
 		// The rays are half resolution with a per-pixel jitter. One bilinear tap shows that jitter as
 		// a fine stipple over everything the shafts cross; four taps offset inside the footprint
 		// average it away for three extra fetches.
@@ -136,7 +146,7 @@ void main() {
 				+ textureLod(rays_tex, uv + vec2(texel.x, -texel.y), 0.0).rgb
 				+ textureLod(rays_tex, uv + vec2(-texel.x, texel.y), 0.0).rgb
 				+ textureLod(rays_tex, uv + vec2(texel.x, texel.y), 0.0).rgb;
-		result += rays * 0.25;
+		result += rays * (0.25 * sky_boost);
 	}
 
 	imageStore(color_image, px, vec4(result, color.a));

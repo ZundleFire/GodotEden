@@ -58,6 +58,13 @@ public:
 		float ray_density = 0.9f;
 		float ray_decay = 0.96f;
 		float ray_radius = 0.6f;
+		// Extra ray weight specifically over sky/fog pixels, scaled by the local fog amount there.
+		// Screen-space rays are additive on an already near-uniform bright sky, so straight shafts
+		// only read as visible light/dark bands where SOMETHING breaks that uniformity -- an
+		// occluder's silhouette, or a cloud edge. This gives the atmosphere itself the same kind of
+		// contrast by making rays punch through haze more than they brighten clear sky, so shafts
+		// become visible fanning up into the sky and through the fog, not just crossing terrain.
+		float ray_sky_boost = 2.5f;
 	};
 
 	EdenAtmospherePostEffect();

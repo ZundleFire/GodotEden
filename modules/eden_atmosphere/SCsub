@@ -22,6 +22,7 @@ module_sources = [
     "register_types.cpp",
     "eden_planet_atmosphere.cpp",
     "eden_cloud_shell.cpp",
+    "eden_planet_rings.cpp",
     "eden_atmosphere_post_effect.cpp",
 ]
 

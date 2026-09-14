@@ -2,6 +2,7 @@
 
 #include "core/config/engine.h"
 #include "eden_atmosphere_shaders.gen.h"
+#include "eden_cloud_shell.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/compositor.h"
@@ -42,6 +43,26 @@ void EdenPlanetAtmosphere::set_moon_light_path(const NodePath &p_path) {
 
 NodePath EdenPlanetAtmosphere::get_moon_light_path() const {
 	return moon_light_path;
+}
+
+void EdenPlanetAtmosphere::set_sun2_light_path(const NodePath &p_path) {
+	sun2_light_path = p_path;
+	sun2_light = nullptr;
+	_resolve_nodes();
+}
+
+NodePath EdenPlanetAtmosphere::get_sun2_light_path() const {
+	return sun2_light_path;
+}
+
+void EdenPlanetAtmosphere::set_moonb_light_path(const NodePath &p_path) {
+	moonb_light_path = p_path;
+	moonb_light = nullptr;
+	_resolve_nodes();
+}
+
+NodePath EdenPlanetAtmosphere::get_moonb_light_path() const {
+	return moonb_light_path;
 }
 
 void EdenPlanetAtmosphere::set_environment_path(const NodePath &p_path) {
@@ -116,6 +137,22 @@ void EdenPlanetAtmosphere::set_moon_texture(const Ref<Texture2D> &p_texture) {
 
 Ref<Texture2D> EdenPlanetAtmosphere::get_moon_texture() const {
 	return moon_texture;
+}
+
+void EdenPlanetAtmosphere::set_moonb_texture(const Ref<Texture2D> &p_texture) {
+	moonb_texture = p_texture;
+}
+
+Ref<Texture2D> EdenPlanetAtmosphere::get_moonb_texture() const {
+	return moonb_texture;
+}
+
+void EdenPlanetAtmosphere::set_parent_planet_texture(const Ref<Texture2D> &p_texture) {
+	parent_planet_texture = p_texture;
+}
+
+Ref<Texture2D> EdenPlanetAtmosphere::get_parent_planet_texture() const {
+	return parent_planet_texture;
 }
 
 static float _luma(const Vector3 &p_v) {
@@ -224,6 +261,7 @@ void EdenPlanetAtmosphere::_update_post_effect() {
 	fp.ray_density = light_ray_density;
 	fp.ray_decay = light_ray_decay;
 	fp.ray_radius = light_ray_radius;
+	fp.ray_sky_boost = light_ray_sky_boost;
 
 	post_effect->set_frame_params(fp);
 }
@@ -266,6 +304,7 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_READY: {
 			_resolve_nodes();
+			_auto_setup();
 			_build_sky();
 			_try_configure_environment();
 			set_process(true);
@@ -273,6 +312,7 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 
 		case NOTIFICATION_PROCESS: {
 			const double delta = get_process_delta_time();
+			parent_planet_band_phase += (float)(delta * (double)parent_planet_band_speed);
 			if (day_length_seconds > 0.0) {
 				// Advance the exported phase itself rather than a separate clock, so freezing
 				// the cycle leaves the sun where it was and the inspector shows the true time.
@@ -283,16 +323,26 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 					// rises later each day by day_length / lunar_cycle_days, as Earth's does.
 					moon_phase = Math::fposmod(moon_phase + (float)(delta / (day_length_seconds * lunar_cycle_days)), 1.0f);
 				}
+				if (moonb_advance_phase && moonb_lunar_cycle_days > 0.0f) {
+					moonb_phase = Math::fposmod(moonb_phase + (float)(delta / (day_length_seconds * moonb_lunar_cycle_days)), 1.0f);
+				}
 			}
-			if (sun_light == nullptr || world_env == nullptr || (moon_light == nullptr && !moon_light_path.is_empty())) {
+			if (sun_light == nullptr || world_env == nullptr || (moon_light == nullptr && !moon_light_path.is_empty()) ||
+					(sun2_light == nullptr && !sun2_light_path.is_empty()) ||
+					(moonb_light == nullptr && !moonb_light_path.is_empty())) {
 				_resolve_nodes();
 			}
+			_auto_setup();
 			_try_configure_environment();
 			_update_sun_direction();
+			_update_sun2_direction();
 			_update_moon_direction();
+			_update_moonb_direction();
 			_push_uniforms();
 			_update_sun_light();
+			_update_sun2_light();
 			_update_moon_light();
+			_update_moonb_light();
 			_update_post_effect();
 			_update_bloom();
 		} break;
@@ -315,8 +365,96 @@ void EdenPlanetAtmosphere::_resolve_nodes() {
 	if (!moon_light_path.is_empty()) {
 		moon_light = Object::cast_to<DirectionalLight3D>(get_node_or_null(moon_light_path));
 	}
+	if (!sun2_light_path.is_empty()) {
+		sun2_light = Object::cast_to<DirectionalLight3D>(get_node_or_null(sun2_light_path));
+	}
+	if (!moonb_light_path.is_empty()) {
+		moonb_light = Object::cast_to<DirectionalLight3D>(get_node_or_null(moonb_light_path));
+	}
 	if (!environment_path.is_empty()) {
 		world_env = Object::cast_to<WorldEnvironment>(get_node_or_null(environment_path));
+	}
+}
+
+// One helper per body so a light already resolved (non-empty path, or a path that has not
+// resolved yet because its target has not entered the tree) is never second-guessed.
+static DirectionalLight3D *_ensure_light(Node *p_owner, DirectionalLight3D *&r_light, NodePath &r_path, const String &p_name) {
+	if (!r_path.is_empty() || r_light != nullptr) {
+		return r_light;
+	}
+	DirectionalLight3D *light = memnew(DirectionalLight3D);
+	light->set_name(p_name);
+	p_owner->add_child(light, false, Node::INTERNAL_MODE_BACK);
+	r_light = light;
+	r_path = p_owner->get_path_to(light);
+	return light;
+}
+
+void EdenPlanetAtmosphere::_auto_setup() {
+	if (!is_inside_tree()) {
+		return;
+	}
+
+	if (auto_create_lights) {
+		_ensure_light(this, sun_light, sun_light_path, "Sun");
+		_ensure_light(this, moon_light, moon_light_path, "Moon")->set_shadow(true);
+		if (sun2_enabled) {
+			_ensure_light(this, sun2_light, sun2_light_path, "Sun2");
+		}
+		if (moonb_enabled) {
+			_ensure_light(this, moonb_light, moonb_light_path, "MoonB");
+		}
+	}
+
+	if (auto_create_environment && environment_path.is_empty() && world_env == nullptr) {
+		WorldEnvironment *we = memnew(WorldEnvironment);
+		we->set_name("Environment");
+		add_child(we, false, INTERNAL_MODE_BACK);
+		world_env = we;
+		environment_path = get_path_to(we);
+		env_configured = false;
+	}
+
+	if (auto_create_planet_mesh) {
+		const String sig = vformat("%f|%d|%d", planet_radius, (int)planet_mesh_segments, (int)planet_mesh_rings);
+		if (auto_planet_mesh == nullptr) {
+			auto_planet_mesh = memnew(MeshInstance3D);
+			auto_planet_mesh->set_name("PlanetMesh");
+			add_child(auto_planet_mesh, false, INTERNAL_MODE_BACK);
+		}
+		if (sig != auto_planet_mesh_signature) {
+			auto_planet_mesh_signature = sig;
+			Ref<SphereMesh> sphere;
+			sphere.instantiate();
+			sphere->set_radius(planet_radius);
+			sphere->set_height(planet_radius * 2.0f);
+			sphere->set_radial_segments(MAX((int)planet_mesh_segments, 8));
+			sphere->set_rings(MAX((int)planet_mesh_rings, 4));
+			auto_planet_mesh->set_mesh(sphere);
+			if (auto_planet_mesh->get_material_override().is_null()) {
+				// A simple lit placeholder -- enough to see the atmosphere's terminator, horizon and
+				// ground colour against; swap in real terrain by pointing auto_create_planet_mesh off
+				// and adding your own MeshInstance3D.
+				Ref<StandardMaterial3D> mat;
+				mat.instantiate();
+				mat->set_albedo(Color(ground_albedo.r, ground_albedo.g, ground_albedo.b));
+				mat->set_roughness(1.0f);
+				auto_planet_mesh->set_material_override(mat);
+			}
+		}
+		if (auto_planet_mesh->get_position() != planet_center) {
+			auto_planet_mesh->set_position(planet_center);
+		}
+	}
+
+	if (auto_create_cloud_shell && auto_cloud_shell == nullptr) {
+		EdenCloudShell *cs = memnew(EdenCloudShell);
+		cs->set_name("CloudShell");
+		cs->set_planet_radius(planet_radius);
+		cs->set_planet_center(planet_center);
+		add_child(cs, false, INTERNAL_MODE_BACK);
+		auto_cloud_shell = cs;
+		add_linked_material(cs->get_material());
 	}
 }
 
@@ -400,50 +538,86 @@ void EdenPlanetAtmosphere::_update_sun_direction() {
 							.normalized();
 }
 
-void EdenPlanetAtmosphere::_update_moon_direction() {
-	// Built in the planet's NON-rotating frame, then carried through the same daily rotation the
-	// sun gets. That split is what makes it behave like Earth's moon:
-	//
-	//  - the orbit is a great circle whose plane is tilted from the equator by the inclination
-	//    about the line of nodes, so the moon's height in the sky wanders month to month;
-	//  - moon_phase is the angle round that orbit measured from the sun, so phase 0 is new moon
-	//    (beside the sun), 0.5 is full (opposite it), and eclipses only line up occasionally
-	//    because the inclined plane rarely passes exactly through the sun;
-	//  - the daily rotation is shared with the sun, so the moon rises and sets like everything
-	//    else in the sky, while its slow phase advance makes it rise later each day.
+// Built in the planet's NON-rotating frame, then carried through the same daily rotation the sun
+// gets. That split is what makes an orbit behave like Earth's moon:
+//
+//  - the orbit is a great circle whose plane is tilted from the equator by the inclination about
+//    the line of nodes, so the body's height in the sky wanders month to month;
+//  - phase is the angle round that orbit measured from the sun, so phase 0 is new (beside the
+//    sun), 0.5 is full (opposite it), and eclipses only line up occasionally because the inclined
+//    plane rarely passes exactly through the sun;
+//  - the daily rotation is shared with the sun, so the body rises and sets like everything else in
+//    the sky, while its slow phase advance makes it rise later each day.
+//
+// Shared by both moons so "two moons" is two real independent orbits, not a hand-copied second
+// body -- give Moon B its own inclination/node/phase and it behaves exactly like a second Earth
+// moon, on its own schedule.
+void EdenPlanetAtmosphere::_compute_moon_orbit(float p_inclination_deg, float p_node_longitude_deg,
+		float p_phase, Vector3 &r_direction, Vector3 &r_orbit_normal) const {
 	Vector3 axis, ea, eb;
 	_equatorial_basis(axis, ea, eb);
 
 	const double dec = Math::deg_to_rad((double)sun_declination_deg);
 	const Vector3 sun_inertial = (ea * (float)Math::cos(dec) + axis * (float)Math::sin(dec)).normalized();
 
-	const double node = Math::deg_to_rad((double)moon_node_longitude_deg);
+	const double node = Math::deg_to_rad((double)p_node_longitude_deg);
 	const Vector3 node_line = (ea * (float)Math::cos(node) + eb * (float)Math::sin(node)).normalized();
-	const Vector3 normal_inertial = axis.rotated(node_line, Math::deg_to_rad(moon_orbit_inclination_deg)).normalized();
+	const Vector3 normal_inertial = axis.rotated(node_line, Math::deg_to_rad(p_inclination_deg)).normalized();
 
 	// Reference direction: the sun projected into the orbital plane. Rotating that within the
-	// plane keeps the moon on a true great circle; rotating the raw sun vector about the normal
-	// would trace a cone instead and full moon would never be opposite the sun.
+	// plane keeps the body on a true great circle; rotating the raw sun vector about the normal
+	// would trace a cone instead and "full" would never be opposite the sun.
 	Vector3 ref = sun_inertial - normal_inertial * sun_inertial.dot(normal_inertial);
 	if (ref.length_squared() < 1e-8) {
 		ref = node_line; // sun exactly on the orbit pole; any in-plane direction will do
 	}
 	ref.normalize();
-	const Vector3 moon_inertial = ref.rotated(normal_inertial, (float)(Math::TAU * (double)moon_phase));
+	const Vector3 body_inertial = ref.rotated(normal_inertial, (float)(Math::TAU * (double)p_phase));
 
 	const float day_angle = (float)(Math::TAU * (double)sun_time_of_day);
-	moon_direction = moon_inertial.rotated(axis, day_angle).normalized();
-	moon_orbit_normal = normal_inertial.rotated(axis, day_angle).normalized();
+	r_direction = body_inertial.rotated(axis, day_angle).normalized();
+	r_orbit_normal = normal_inertial.rotated(axis, day_angle).normalized();
+}
+
+void EdenPlanetAtmosphere::_update_moon_direction() {
+	_compute_moon_orbit(moon_orbit_inclination_deg, moon_node_longitude_deg, moon_phase, moon_direction, moon_orbit_normal);
+}
+
+void EdenPlanetAtmosphere::_update_moonb_direction() {
+	_compute_moon_orbit(moonb_orbit_inclination_deg, moonb_node_longitude_deg, moonb_phase, moonb_direction, moonb_orbit_normal);
 }
 
 Vector3 EdenPlanetAtmosphere::get_sun_direction() const {
 	return sun_direction;
 }
 
+// Offset from the primary sun by its own azimuth/elevation, in a basis built from the primary
+// direction -- "parked" near the main sun rather than needing a separate orbit.
+void EdenPlanetAtmosphere::_update_sun2_direction() {
+	Vector3 up_ref = planet_spin_axis.normalized();
+	if (!up_ref.is_finite() || Math::abs(sun_direction.dot(up_ref)) > 0.99f) {
+		up_ref = Vector3(1, 0, 0);
+	}
+	Vector3 right = up_ref.cross(sun_direction).normalized();
+	Vector3 up = sun_direction.cross(right).normalized();
+	sun2_direction = sun_direction
+							 .rotated(right, Math::deg_to_rad(sun2_offset_elevation_deg))
+							 .rotated(up, Math::deg_to_rad(sun2_offset_azimuth_deg))
+							 .normalized();
+}
+
+Vector3 EdenPlanetAtmosphere::get_sun2_direction() const {
+	return sun2_direction;
+}
+
 float EdenPlanetAtmosphere::get_moon_illumination() const {
 	// Half the cosine of the sun-moon elongation: 0 when the moon sits beside the sun, 1 when
 	// opposite. Rotation-invariant, so either frame gives the same answer.
 	return CLAMP(0.5f * (1.0f - sun_direction.dot(moon_direction)), 0.0f, 1.0f);
+}
+
+float EdenPlanetAtmosphere::get_moonb_illumination() const {
+	return CLAMP(0.5f * (1.0f - sun_direction.dot(moonb_direction)), 0.0f, 1.0f);
 }
 
 float EdenPlanetAtmosphere::phase_for_sun_elevation(const Vector3 &p_up, float p_elevation_deg, bool p_rising) const {
@@ -506,6 +680,38 @@ void EdenPlanetAtmosphere::_update_sun_light() {
 	sun_light->set_param(Light3D::PARAM_ENERGY, sun_light_energy * MAX(luma, night_light_floor));
 }
 
+void EdenPlanetAtmosphere::_update_sun2_light() {
+	if (sun2_light == nullptr || !sun2_enabled || !drive_sun2_light) {
+		return;
+	}
+
+	if (drive_sun2_rotation) {
+		Vector3 up_ref = planet_spin_axis.normalized();
+		if (Math::abs(sun2_direction.dot(up_ref)) > 0.99f) {
+			up_ref = Vector3(1, 0, 0);
+		}
+		const Vector3 origin = sun2_light->get_global_position();
+		sun2_light->look_at_from_position(origin, origin - sun2_direction, up_ref);
+	}
+
+	// Reuses the same CPU scattering mirror as the primary sun, just evaluated toward sun2's own
+	// direction -- it gets the same horizon reddening and planet-shadow occlusion for free.
+	const Vector3 t = _transmittance_toward(_camera_planet_relative(), sun2_direction);
+	const float peak = MAX(MAX(t.x, t.y), t.z);
+	if (peak <= 1e-5f) {
+		sun2_light->set_color(Color(sun2_tint.r, sun2_tint.g, sun2_tint.b));
+		sun2_light->set_param(Light3D::PARAM_ENERGY, sun2_light_energy * sun2_night_light_floor);
+		return;
+	}
+	const Vector3 hue = t / peak;
+	sun2_light->set_color(Color(sun2_tint.r * hue.x, sun2_tint.g * hue.y, sun2_tint.b * hue.z));
+	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
+	sun2_light->set_param(Light3D::PARAM_ENERGY, sun2_light_energy * MAX(luma, sun2_night_light_floor));
+	if (sun2_light->is_visible() != sun2_enabled) {
+		sun2_light->set_visible(sun2_enabled);
+	}
+}
+
 void EdenPlanetAtmosphere::_update_moon_light() {
 	if (moon_light == nullptr || !drive_moon_light) {
 		return;
@@ -546,6 +752,43 @@ void EdenPlanetAtmosphere::_update_moon_light() {
 		if (moon_light->is_visible() != lit) {
 			moon_light->set_visible(lit);
 		}
+	}
+}
+
+void EdenPlanetAtmosphere::_update_moonb_light() {
+	if (moonb_light == nullptr || !moonb_enabled || !drive_moonb_light) {
+		return;
+	}
+
+	if (drive_moonb_rotation) {
+		Vector3 up_ref = moonb_orbit_normal;
+		if (Math::abs(moonb_direction.dot(up_ref)) > 0.99f) {
+			up_ref = Vector3(1, 0, 0);
+		}
+		const Vector3 origin = moonb_light->get_global_position();
+		moonb_light->look_at_from_position(origin, origin - moonb_direction, up_ref);
+	}
+
+	const Vector3 t = _transmittance_toward(_camera_planet_relative(), moonb_direction);
+	const float phase_brightness = Math::pow(get_moonb_illumination(), MAX(moonb_light_phase_exponent, 0.0f));
+
+	const float peak = MAX(MAX(t.x, t.y), t.z);
+	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
+	const float energy = moonb_light_energy * moonb_intensity * phase_brightness * luma;
+
+	if (peak > 1e-5f) {
+		const Vector3 hue = t / peak;
+		moonb_light->set_color(Color(moonb_light_color.r * hue.x, moonb_light_color.g * hue.y, moonb_light_color.b * hue.z));
+	}
+	moonb_light->set_param(Light3D::PARAM_ENERGY, energy);
+
+	if (moonb_light_hide_when_dark) {
+		const bool lit = energy > 1e-3f;
+		if (moonb_light->is_visible() != lit) {
+			moonb_light->set_visible(lit);
+		}
+	} else if (moonb_light->is_visible() != moonb_enabled) {
+		moonb_light->set_visible(moonb_enabled);
 	}
 }
 
@@ -646,6 +889,50 @@ Vector3 EdenPlanetAtmosphere::_transmittance_toward(const Vector3 &p_point, cons
 				   Math::exp(-(br.y * depth.x + bm * depth.y)),
 				   Math::exp(-(br.z * depth.x + bm * depth.y))) *
 			shadow;
+}
+
+Vector3 EdenPlanetAtmosphere::_sky_radiance(const Vector3 &p_point, const Vector3 &p_dir) const {
+	// Coarse on purpose: this feeds one ambient colour per frame, not pixels.
+	const Vector2 atm = _ray_sphere(p_point, p_dir, planet_radius + atmosphere_height);
+	const float t_start = MAX(atm.x, 0.0f);
+	float t_end = atm.y;
+	if (t_end <= t_start) {
+		return Vector3();
+	}
+	const Vector2 ground = _ray_sphere(p_point, p_dir, planet_radius);
+	if (ground.y > ground.x && ground.x > 0.0f) {
+		t_end = MIN(t_end, ground.x);
+	}
+
+	const Vector3 br = _beta_rayleigh();
+	const float bm = _beta_mie();
+	const float mu = p_dir.dot(sun_direction);
+	const float ph_r = 0.0596831036f * (1.0f + mu * mu);
+	const float g = mie_anisotropy;
+	const float g2 = g * g;
+	const float ph_m = (3.0f * (1.0f - g2)) / (2.0f * (2.0f + g2)) * (1.0f + mu * mu) /
+			MAX(Math::pow(1.0f + g2 - 2.0f * g * mu, 1.5f), 1e-4f);
+
+	const int steps = 8;
+	const float step = (t_end - t_start) / (float)steps;
+	Vector2 view_depth;
+	Vector3 sum_r, sum_m;
+	float t = t_start + step * 0.5f;
+	for (int i = 0; i < steps; i++) {
+		const Vector3 p = p_point + p_dir * t;
+		const float h = MAX(p.length() - planet_radius, 0.0f);
+		const float d_r = Math::exp(-h / rayleigh_scale_height) * step;
+		const float d_m = Math::exp(-h / mie_scale_height) * step;
+		view_depth += Vector2(d_r, d_m);
+		const Vector2 sun_depth = _optical_depth_along(p, sun_direction);
+		const Vector3 tau = br * (view_depth.x + sun_depth.x) + Vector3(1, 1, 1) * (bm * (float)MIE_EXTINCTION_FACTOR * (view_depth.y + sun_depth.y));
+		const Vector3 att = Vector3(Math::exp(-tau.x), Math::exp(-tau.y), Math::exp(-tau.z)) * _planet_shadow_dir(p, sun_direction);
+		sum_r += att * d_r;
+		sum_m += att * d_m;
+		t += step;
+	}
+	const Vector3 rgb = Vector3(sum_r.x * br.x, sum_r.y * br.y, sum_r.z * br.z) * ph_r + sum_m * (bm * ph_m);
+	return Vector3(rgb.x * sun_tint.r, rgb.y * sun_tint.g, rgb.z * sun_tint.b) * (sun_intensity * exposure);
 }
 
 float EdenPlanetAtmosphere::_planet_shadow(const Vector3 &p_point) const {
@@ -757,6 +1044,7 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group) _set_on_all(SNAME(#m_name), m_name);
 #define EDEN_ATMO_U_VEC3(m_name, m_x, m_y, m_z, m_group) _set_on_all(SNAME(#m_name), m_name);
 #define EDEN_ATMO_U_COLOR(m_name, m_r, m_g, m_b, m_group) _set_on_all(SNAME(#m_name), m_name);
+#define EDEN_ATMO_U_INT(m_name, m_default, m_hint, m_group) _set_on_all(SNAME(#m_name), m_name);
 #define EDEN_ATMO_L_FLOAT(m_name, m_default, m_hint, m_group)
 #define EDEN_ATMO_L_VEC3(m_name, m_x, m_y, m_z, m_group)
 #define EDEN_ATMO_L_BOOL(m_name, m_default, m_group)
@@ -767,13 +1055,22 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 #undef EDEN_ATMO_U_FLOAT
 #undef EDEN_ATMO_U_VEC3
 #undef EDEN_ATMO_U_COLOR
+#undef EDEN_ATMO_U_INT
 #undef EDEN_ATMO_L_FLOAT
 #undef EDEN_ATMO_L_VEC3
 #undef EDEN_ATMO_L_BOOL
 #undef EDEN_ATMO_L_INT
 
 	_set_on_all(SNAME("sun_direction"), sun_direction);
+	_set_on_all(SNAME("sun2_enabled"), sun2_enabled);
+	_set_on_all(SNAME("sun2_direction"), sun2_direction);
 	_set_on_all(SNAME("moon_orbit_normal"), moon_orbit_normal);
+	// Sky colour straight up from the camera, so clouds can shade their shadowed faces with the
+	// sky actually above them -- blue at noon, violet at dusk, black at night.
+	{
+		const Vector3 cam = _camera_planet_relative();
+		_set_on_all(SNAME("sky_ambient_color"), _sky_radiance(cam, cam.normalized()));
+	}
 	_set_on_all(SNAME("moon_illumination"), get_moon_illumination());
 	// Brightness with the phase curve applied, so moonlit clouds follow the same falloff as the
 	// moon DirectionalLight3D rather than a hardcoded copy of it.
@@ -781,6 +1078,21 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 	_set_on_all(SNAME("moon_texture"), moon_texture);
 	_set_on_all(SNAME("moon_texture_equirect"), moon_texture_equirect);
 	_set_on_all(SNAME("moon_texture_rotation"), Math::deg_to_rad(moon_texture_rotation_deg));
+
+	_set_on_all(SNAME("moonb_direction"), moonb_direction);
+	_set_on_all(SNAME("moonb_orbit_normal"), moonb_orbit_normal);
+	_set_on_all(SNAME("moonb_illumination"), get_moonb_illumination());
+	_set_on_all(SNAME("moonb_phase_brightness"), Math::pow(get_moonb_illumination(), MAX(moonb_light_phase_exponent, 0.0f)));
+	_set_on_all(SNAME("moonb_texture"), moonb_texture);
+	_set_on_all(SNAME("moonb_texture_equirect"), moonb_texture_equirect);
+	_set_on_all(SNAME("moonb_texture_rotation"), Math::deg_to_rad(moonb_texture_rotation_deg));
+	_set_on_all(SNAME("moonb_enabled"), moonb_enabled);
+
+	_set_on_all(SNAME("parent_planet_enabled"), parent_planet_enabled);
+	_set_on_all(SNAME("parent_planet_texture"), parent_planet_texture);
+	_set_on_all(SNAME("parent_planet_texture_enabled"), parent_planet_texture.is_valid());
+	_set_on_all(SNAME("parent_planet_texture_rotation"), Math::deg_to_rad(parent_planet_texture_rotation_deg));
+	_set_on_all(SNAME("parent_planet_band_time"), parent_planet_band_phase);
 
 	// Sky shaders get no viewport-size built-in, and the dither needs a vec2: scaling both axes
 	// by one scalar makes the noise vary at different rates per axis and smears it into streaks.
@@ -840,6 +1152,7 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group) EDEN_ATMO_DEF_SCALAR(float, m_name)
 #define EDEN_ATMO_U_VEC3(m_name, m_x, m_y, m_z, m_group) EDEN_ATMO_DEF_REF(Vector3, m_name)
 #define EDEN_ATMO_U_COLOR(m_name, m_r, m_g, m_b, m_group) EDEN_ATMO_DEF_REF(Color, m_name)
+#define EDEN_ATMO_U_INT(m_name, m_default, m_hint, m_group) EDEN_ATMO_DEF_SCALAR(int, m_name)
 #define EDEN_ATMO_L_FLOAT(m_name, m_default, m_hint, m_group) EDEN_ATMO_DEF_SCALAR(float, m_name)
 #define EDEN_ATMO_L_VEC3(m_name, m_x, m_y, m_z, m_group) EDEN_ATMO_DEF_REF(Vector3, m_name)
 #define EDEN_ATMO_L_BOOL(m_name, m_default, m_group) EDEN_ATMO_DEF_SCALAR(bool, m_name)
@@ -850,6 +1163,7 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 #undef EDEN_ATMO_U_FLOAT
 #undef EDEN_ATMO_U_VEC3
 #undef EDEN_ATMO_U_COLOR
+#undef EDEN_ATMO_U_INT
 #undef EDEN_ATMO_L_FLOAT
 #undef EDEN_ATMO_L_VEC3
 #undef EDEN_ATMO_L_BOOL
@@ -866,6 +1180,7 @@ void EdenPlanetAtmosphere::_bind_methods() {
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group) EDEN_BIND_ACCESSORS(m_name)
 #define EDEN_ATMO_U_VEC3(m_name, m_x, m_y, m_z, m_group) EDEN_BIND_ACCESSORS(m_name)
 #define EDEN_ATMO_U_COLOR(m_name, m_r, m_g, m_b, m_group) EDEN_BIND_ACCESSORS(m_name)
+#define EDEN_ATMO_U_INT(m_name, m_default, m_hint, m_group) EDEN_BIND_ACCESSORS(m_name)
 #define EDEN_ATMO_L_FLOAT(m_name, m_default, m_hint, m_group) EDEN_BIND_ACCESSORS(m_name)
 #define EDEN_ATMO_L_VEC3(m_name, m_x, m_y, m_z, m_group) EDEN_BIND_ACCESSORS(m_name)
 #define EDEN_ATMO_L_BOOL(m_name, m_default, m_group) EDEN_BIND_ACCESSORS(m_name)
@@ -876,6 +1191,7 @@ void EdenPlanetAtmosphere::_bind_methods() {
 #undef EDEN_ATMO_U_FLOAT
 #undef EDEN_ATMO_U_VEC3
 #undef EDEN_ATMO_U_COLOR
+#undef EDEN_ATMO_U_INT
 #undef EDEN_ATMO_L_FLOAT
 #undef EDEN_ATMO_L_VEC3
 #undef EDEN_ATMO_L_BOOL
@@ -885,6 +1201,8 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_sun_light_path"), &EdenPlanetAtmosphere::get_sun_light_path);
 	ClassDB::bind_method(D_METHOD("set_moon_light_path", "path"), &EdenPlanetAtmosphere::set_moon_light_path);
 	ClassDB::bind_method(D_METHOD("get_moon_light_path"), &EdenPlanetAtmosphere::get_moon_light_path);
+	ClassDB::bind_method(D_METHOD("set_sun2_light_path", "path"), &EdenPlanetAtmosphere::set_sun2_light_path);
+	ClassDB::bind_method(D_METHOD("get_sun2_light_path"), &EdenPlanetAtmosphere::get_sun2_light_path);
 	ClassDB::bind_method(D_METHOD("set_environment_path", "path"), &EdenPlanetAtmosphere::set_environment_path);
 	ClassDB::bind_method(D_METHOD("get_environment_path"), &EdenPlanetAtmosphere::get_environment_path);
 	ClassDB::bind_method(D_METHOD("set_linked_materials", "materials"), &EdenPlanetAtmosphere::set_linked_materials);
@@ -899,9 +1217,17 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_moon_texture", "texture"), &EdenPlanetAtmosphere::set_moon_texture);
 	ClassDB::bind_method(D_METHOD("get_moon_texture"), &EdenPlanetAtmosphere::get_moon_texture);
 	ClassDB::bind_method(D_METHOD("get_moon_illumination"), &EdenPlanetAtmosphere::get_moon_illumination);
+	ClassDB::bind_method(D_METHOD("set_moonb_light_path", "path"), &EdenPlanetAtmosphere::set_moonb_light_path);
+	ClassDB::bind_method(D_METHOD("get_moonb_light_path"), &EdenPlanetAtmosphere::get_moonb_light_path);
+	ClassDB::bind_method(D_METHOD("set_moonb_texture", "texture"), &EdenPlanetAtmosphere::set_moonb_texture);
+	ClassDB::bind_method(D_METHOD("get_moonb_texture"), &EdenPlanetAtmosphere::get_moonb_texture);
+	ClassDB::bind_method(D_METHOD("get_moonb_illumination"), &EdenPlanetAtmosphere::get_moonb_illumination);
+	ClassDB::bind_method(D_METHOD("set_parent_planet_texture", "texture"), &EdenPlanetAtmosphere::set_parent_planet_texture);
+	ClassDB::bind_method(D_METHOD("get_parent_planet_texture"), &EdenPlanetAtmosphere::get_parent_planet_texture);
 	ClassDB::bind_method(D_METHOD("get_space_overlay"), &EdenPlanetAtmosphere::get_space_overlay);
 
 	ClassDB::bind_method(D_METHOD("get_sun_direction"), &EdenPlanetAtmosphere::get_sun_direction);
+	ClassDB::bind_method(D_METHOD("get_sun2_direction"), &EdenPlanetAtmosphere::get_sun2_direction);
 	ClassDB::bind_method(D_METHOD("sun_transmittance_at", "planet_relative_position"), &EdenPlanetAtmosphere::sun_transmittance_at);
 	ClassDB::bind_method(D_METHOD("phase_for_sun_elevation", "up", "elevation_deg", "rising"),
 			&EdenPlanetAtmosphere::phase_for_sun_elevation, DEFVAL(true));
@@ -914,6 +1240,8 @@ void EdenPlanetAtmosphere::_bind_methods() {
 			"set_sun_light_path", "get_sun_light_path");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "moon_light_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "DirectionalLight3D"),
 			"set_moon_light_path", "get_moon_light_path");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "sun2_light_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "DirectionalLight3D"),
+			"set_sun2_light_path", "get_sun2_light_path");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "environment_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "WorldEnvironment"),
 			"set_environment_path", "get_environment_path");
 	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "linked_materials", PROPERTY_HINT_ARRAY_TYPE,
@@ -931,6 +1259,12 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ADD_GROUP("Moon", "");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "moon_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
 			"set_moon_texture", "get_moon_texture");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "moonb_light_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "DirectionalLight3D"),
+			"set_moonb_light_path", "get_moonb_light_path");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "moonb_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
+			"set_moonb_texture", "get_moonb_texture");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "parent_planet_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
+			"set_parent_planet_texture", "get_parent_planet_texture");
 
 	// Inspector properties, grouped as declared in the table.
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group)                                              \
@@ -942,6 +1276,9 @@ void EdenPlanetAtmosphere::_bind_methods() {
 #define EDEN_ATMO_U_COLOR(m_name, m_r, m_g, m_b, m_group)                                              \
 	ADD_GROUP(m_group, "");                                                                            \
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, #m_name, PROPERTY_HINT_COLOR_NO_ALPHA), "set_" #m_name, "get_" #m_name);
+#define EDEN_ATMO_U_INT(m_name, m_default, m_hint, m_group)                                              \
+	ADD_GROUP(m_group, "");                                                                              \
+	ADD_PROPERTY(PropertyInfo(Variant::INT, #m_name, PROPERTY_HINT_RANGE, m_hint), "set_" #m_name, "get_" #m_name);
 #define EDEN_ATMO_L_FLOAT(m_name, m_default, m_hint, m_group)                                              \
 	ADD_GROUP(m_group, "");                                                                                \
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, #m_name, PROPERTY_HINT_RANGE, m_hint), "set_" #m_name, "get_" #m_name);
@@ -962,6 +1299,7 @@ void EdenPlanetAtmosphere::_bind_methods() {
 #undef EDEN_ATMO_U_FLOAT
 #undef EDEN_ATMO_U_VEC3
 #undef EDEN_ATMO_U_COLOR
+#undef EDEN_ATMO_U_INT
 #undef EDEN_ATMO_L_FLOAT
 #undef EDEN_ATMO_L_VEC3
 #undef EDEN_ATMO_L_BOOL

@@ -61,6 +61,7 @@ def emit(name, text):
 def generate(out_path):
     sky = inline_includes(read("planet_sky.gdshader"))
     clouds = inline_includes(read("planet_clouds.gdshader"))
+    rings = inline_includes(read("planet_rings.gdshader"))
     # RenderingDevice compute shaders for the post-process (fog + light rays). glslang requires
     # `#version` to be the first line, so it must survive inlining untouched -- it does, because
     # the include only ever appears after it.
@@ -79,6 +80,8 @@ def generate(out_path):
         "",
         emit("EDEN_CLOUD_SHADER_CODE", clouds),
         "",
+        emit("EDEN_RINGS_SHADER_CODE", rings),
+        "",
         emit("EDEN_RAYS_COMPUTE_CODE", rays),
         "",
         emit("EDEN_FOG_COMPOSITE_COMPUTE_CODE", fog),
@@ -90,7 +93,7 @@ def generate(out_path):
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(parts))
 
-    print("wrote %s (sky %d, clouds %d, rays %d, fog %d bytes)" % (out_path, len(sky), len(clouds), len(rays), len(fog)))
+    print("wrote %s (sky %d, clouds %d, rings %d, rays %d, fog %d bytes)" % (out_path, len(sky), len(clouds), len(rings), len(rays), len(fog)))
 
 
 # SCons action entry point (see SCsub).
