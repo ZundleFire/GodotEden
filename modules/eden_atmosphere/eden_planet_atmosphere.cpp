@@ -396,15 +396,27 @@ void EdenPlanetAtmosphere::_resolve_nodes() {
 
 // One helper per body so a light already resolved (non-empty path, or a path that has not
 // resolved yet because its target has not entered the tree) is never second-guessed.
-static DirectionalLight3D *_ensure_light(Node *p_owner, DirectionalLight3D *&r_light, NodePath &r_path, const String &p_name) {
-	if (!r_path.is_empty() || r_light != nullptr) {
+// Deliberately does NOT write r_path. The light this creates is an internal, unowned child --
+// invisible to the scene tree dock and never saved with the scene -- but the exported NodePath
+// property IS saved regardless of what it points to. Writing r_path here once produced a scene
+// saved with e.g. sun_light_path = NodePath("Sun") pointing at a "Sun" that was never actually
+// part of the saved scene: on the next load the path was non-empty (so auto-setup would not
+// recreate anything) but dangling (so it resolved to nothing) -- silent, and it crashed the
+// renderer. Leaving the property empty means auto-setup keeps recreating the same internal light
+// every load, exactly as if nothing had ever been auto-created, however many times the scene is
+// saved in between.
+static DirectionalLight3D *_ensure_light(Node *p_owner, DirectionalLight3D *&r_light, const NodePath &r_path, const String &p_name) {
+	// Keyed on the resolved POINTER, not the path string: a path that is set but does not resolve
+	// (a stale reference to a node that no longer exists, e.g. from an old scene saved before this
+	// fix) must not permanently block auto-setup from providing a working light -- see the crash
+	// this caused when sun_light_path and moon_light_path were BOTH left dangling like that.
+	if (r_light != nullptr) {
 		return r_light;
 	}
 	DirectionalLight3D *light = memnew(DirectionalLight3D);
 	light->set_name(p_name);
 	p_owner->add_child(light, false, Node::INTERNAL_MODE_BACK);
 	r_light = light;
-	r_path = p_owner->get_path_to(light);
 	return light;
 }
 
@@ -424,12 +436,13 @@ void EdenPlanetAtmosphere::_auto_setup() {
 		}
 	}
 
-	if (auto_create_environment && environment_path.is_empty() && world_env == nullptr) {
+	if (auto_create_environment && world_env == nullptr) {
+		// Also deliberately leaves environment_path empty -- see _ensure_light()'s comment above;
+		// the same dangling-NodePath-survives-a-save problem applies here.
 		WorldEnvironment *we = memnew(WorldEnvironment);
 		we->set_name("Environment");
 		add_child(we, false, INTERNAL_MODE_BACK);
 		world_env = we;
-		environment_path = get_path_to(we);
 		env_configured = false;
 		auto_created_environment = true;
 	}
