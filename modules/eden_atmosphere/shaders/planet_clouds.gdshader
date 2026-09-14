@@ -490,13 +490,17 @@ void fragment() {
 	// Only a view from BELOW sees the base that light has crossed the body to reach.
 	float looking_up = clamp(dot(rd, mid_up) * 4.0, 0.0, 1.0);
 	// Low sun skims under the base, unshadowed by the body: orange and pink undersides at sunset.
-	// sun_col already carries the planet shadow, so this dies on its own after dusk.
-	float horizon = 1.0 - abs(dot(mid_up, sun_direction));
-	horizon *= horizon;
-	float underlight = horizon * horizon * cloud_sunset_underlight;
+	// One-sided on purpose -- real grazing light only reaches cloud approaching the terminator from
+	// the DAY side, never past it into true night -- and narrow, so from orbit it reads as a glowing
+	// ring localised at the terminator rather than smeared across most of the visible disc. A
+	// symmetric, wider falloff here used to do exactly that: a single mid_p sample per pixel has no
+	// idea it is being viewed from a wide orbital FOV instead of from the ground it was tuned for.
+	float sun_alt = dot(mid_up, sun_direction);
+	float grazing = smoothstep(-0.06, 0.16, sun_alt) * (1.0 - smoothstep(0.16, 0.55, sun_alt));
+	float underlight = grazing * cloud_sunset_underlight;
 	// Low sun: saturate the sunlight's hue (ratios squared, brightest channel kept) so lit undersides
 	// read orange and pink instead of being bleached to cream by the tonemapper's highlight rolloff.
-	vec3 sun_tone = mix(sun_col, sun_col * sun_col / max(max(sun_col.r, max(sun_col.g, sun_col.b)), 1e-4), horizon * horizon);
+	vec3 sun_tone = mix(sun_col, sun_col * sun_col / max(max(sun_col.r, max(sun_col.g, sun_col.b)), 1e-4), grazing);
 	// Two-tone: a shadow tone taken from the sky (blue by day, violet at dusk) and the sunlight. Mixing
 	// rather than adding keeps real contrast between them; ambient added on top of the lit tone washed
 	// every cloud out to one pale grey. The sky colour is half desaturated first: at full saturation
@@ -566,7 +570,11 @@ void fragment() {
 
 		// Flat per-facet brightness: faces tilted toward the sun are lighter, away darker, in the shadow
 		// tone too -- so the low-poly faceting still reads from below, where almost everything is shadow.
-		float facet_mod = 1.0 + facet_sun - dot(up, sun_direction);
+		// Clamped: unbounded, a facet tilted enough toward the sun could push this well past 1 even on
+		// a facet whose SMOOTH position is on the night side, amplifying the (correctly dark) shadow
+		// tone back up into something that reads as lit -- which is exactly what large cloud_absorption/
+		// cloud_sun_intensity values (a bright sun_tone to amplify toward) made obvious from orbit.
+		float facet_mod = clamp(1.0 + facet_sun - dot(up, sun_direction), 0.5, 1.5);
 		vec3 lit = cloud_albedo * (mix(shadow_tone, sun_tone, light) * facet_mod + night_lit);
 
 		// Front-to-back compositing.
