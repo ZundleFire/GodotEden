@@ -31,3 +31,16 @@ layout(set = 0, binding = 3, std140) uniform Params {
 float ign(vec2 px) {
 	return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
 }
+
+// See atmosphere_common.gdshaderinc's clamp_planet_relative() -- same guard, mirrored here since
+// this compute shader does not share that include. Keeps the fog/rays march out of the same
+// exotic-banding failure mode when the camera sits deep inside (or at) the planet centre.
+vec3 clamp_planet_relative(vec3 ro, float planet_radius) {
+	float len = length(ro);
+	float floor_r = planet_radius + 1.0;
+	if (len >= floor_r) {
+		return ro;
+	}
+	vec3 dir = len > 1e-4 ? ro / len : vec3(0.0, 1.0, 0.0);
+	return dir * floor_r;
+}

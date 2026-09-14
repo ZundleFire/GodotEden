@@ -397,7 +397,7 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 cam = CAMERA_POSITION_WORLD - planet_center;
+	vec3 cam = clamp_planet_relative(CAMERA_POSITION_WORLD - planet_center);
 	vec3 rd = normalize(v_world_pos - CAMERA_POSITION_WORLD);
 
 	float r_in = planet_radius + cloud_bottom;

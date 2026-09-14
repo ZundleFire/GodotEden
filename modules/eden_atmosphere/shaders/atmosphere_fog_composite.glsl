@@ -99,7 +99,7 @@ void main() {
 		}
 
 		vec3 rd = normalize(mat3(p.cam_transform) * view_dir);
-		vec3 ro = p.cam_transform[3].xyz - p.planet.xyz;
+		vec3 ro = clamp_planet_relative(p.cam_transform[3].xyz - p.planet.xyz, p.planet.w);
 
 		if (sky) {
 			// The sky shader draws its own analytic ground past the meshed terrain; stop there.

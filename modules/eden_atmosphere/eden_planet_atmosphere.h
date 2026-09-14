@@ -229,6 +229,7 @@ private:
 	MeshInstance3D *auto_planet_mesh = nullptr;
 	String auto_planet_mesh_signature;
 	Node *auto_cloud_shell = nullptr;
+	bool auto_created_environment = false;
 	Vector3 sun_direction = Vector3(0, 1, 0);
 	Vector3 sun2_direction = Vector3(0, 1, 0);
 	// Normal of the moon's orbital plane in the planet-fixed frame. Doubles as the moon's "up"

@@ -487,7 +487,7 @@ float pp_clouds(vec2 l, float z, mat3 rot) {
 }
 
 void sky() {
-	vec3 ro = POSITION - planet_center;
+	vec3 ro = clamp_planet_relative(POSITION - planet_center);
 	vec3 rd = EYEDIR;
 
 	float t_start;

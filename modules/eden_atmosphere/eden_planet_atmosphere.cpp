@@ -66,6 +66,16 @@ NodePath EdenPlanetAtmosphere::get_moonb_light_path() const {
 }
 
 void EdenPlanetAtmosphere::set_environment_path(const NodePath &p_path) {
+	// If this instance auto-created the WorldEnvironment it is about to stop using, free it rather
+	// than leaving it alive with the post-process compositor effect still attached -- two live
+	// WorldEnvironments both holding that effect is exactly what crashed the renderer before
+	// auto-setup was moved off NOTIFICATION_READY (see the comment there); this is the same
+	// protection for a path reassigned later, by a script or the inspector, instead of at ready.
+	if (auto_created_environment && world_env != nullptr) {
+		_detach_post_effect();
+		world_env->queue_free();
+	}
+	auto_created_environment = false;
 	environment_path = p_path;
 	world_env = nullptr;
 	env_configured = false;
@@ -304,7 +314,15 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_READY: {
 			_resolve_nodes();
-			_auto_setup();
+			// Deliberately NOT called here: children finish _ready() before their parent does, so
+			// for a node placed directly in a scene (rather than created by a script), this fires
+			// before a parent's own _ready() has had a chance to set sun_light_path etc. itself.
+			// Auto-creating here and then having the parent immediately repoint those paths left
+			// two WorldEnvironments alive at once, each with the post-process effect attached --
+			// harmless-looking but it crashed the renderer. The first NOTIFICATION_PROCESS tick,
+			// below, runs after the WHOLE ready cascade (parents included) has finished, so by then
+			// a script that wants to own the wiring already has -- auto-setup only fills in what is
+			// still empty at that point.
 			_build_sky();
 			_try_configure_environment();
 			set_process(true);
@@ -413,6 +431,7 @@ void EdenPlanetAtmosphere::_auto_setup() {
 		world_env = we;
 		environment_path = get_path_to(we);
 		env_configured = false;
+		auto_created_environment = true;
 	}
 
 	if (auto_create_planet_mesh) {

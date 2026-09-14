@@ -29,6 +29,25 @@ uniform float planet_radius = 40000.0;
 // [planet_radius, planet_radius + atmosphere_height].
 uniform float atmosphere_height : hint_range(500.0, 20000.0) = 4000.0;
 
+// Guards against a planet-relative camera position that sits deep inside (or at) the planet
+// centre -- every distance-from-centre computation below assumes "altitude" is a small number
+// near planet_radius, not a wild negative one. That only happens by mistake -- a camera parked
+// at the world origin before anything has positioned it relative to the planet (an editor
+// viewport's default camera is exactly this case, now that the node can appear there with no
+// scene setup at all) -- but when it does, the scattering integral sees an "altitude" of tens of
+// thousands of metres below ground and produces exotic banding instead of a sky. Clamping the
+// distance to at least the surface mirrors what EdenPlanetAtmosphere::_camera_planet_relative()
+// already does on the CPU side for the exact same reason.
+vec3 clamp_planet_relative(vec3 ro) {
+	float len = length(ro);
+	float floor_r = planet_radius + 1.0;
+	if (len >= floor_r) {
+		return ro;
+	}
+	vec3 dir = len > 1e-4 ? ro / len : vec3(0.0, 1.0, 0.0);
+	return dir * floor_r;
+}
+
 // Exponential density scale heights: density(h) = exp(-h / scale_height).
 // Earth's are 8000m (Rayleigh) / 1200m (Mie); these are compressed for a 20km planet so
 // the visible gradient fits inside a shell you can actually fly through.
