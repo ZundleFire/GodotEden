@@ -3,6 +3,7 @@
 #include "core/config/engine.h"
 #include "eden_atmosphere_shaders.gen.h"
 #include "eden_cloud_shell.h"
+#include "eden_planet_rings.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/compositor.h"
@@ -487,6 +488,31 @@ void EdenPlanetAtmosphere::_auto_setup() {
 		add_child(cs, false, INTERNAL_MODE_BACK);
 		auto_cloud_shell = cs;
 		add_linked_material(cs->get_material());
+	}
+
+	// Auto-link any sibling EdenCloudShell / EdenPlanetRings -- clouds/rings placed as siblings
+	// (the normal, script-free way to combine them with the atmosphere, exactly as the sample
+	// scenes do) otherwise never receive sun_direction and the rest of the per-frame uniform push
+	// at all, and fall back to their shader defaults -- including sun_direction = straight up,
+	// which reads as "the northern hemisphere is permanently lit, the southern permanently dark,
+	// and time of day does nothing" once you notice it. A script normally does this linking by
+	// hand (add_linked_material()); without one -- in the editor, or any runtime scene that never
+	// got that glue code written -- it silently never happened. Idempotent (add_linked_material()
+	// already no-ops on a material already linked), so running this every frame just picks up
+	// anything added to the scene later for free.
+	Node *sibling_scope = get_parent();
+	if (sibling_scope != nullptr) {
+		for (int i = 0; i < sibling_scope->get_child_count(); i++) {
+			Node *sibling = sibling_scope->get_child(i);
+			EdenCloudShell *cs2 = Object::cast_to<EdenCloudShell>(sibling);
+			if (cs2 != nullptr) {
+				add_linked_material(cs2->get_material());
+			}
+			EdenPlanetRings *pr = Object::cast_to<EdenPlanetRings>(sibling);
+			if (pr != nullptr) {
+				add_linked_material(pr->get_material());
+			}
+		}
 	}
 }
 
