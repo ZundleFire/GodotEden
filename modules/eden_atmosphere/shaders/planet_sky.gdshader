@@ -492,12 +492,15 @@ void sky() {
 	vec3 inscatter = vec3(0.0);
 	vec3 transmittance = vec3(1.0);
 	if (in_atmosphere) {
-		// Per-pixel dither on the sample positions. The radiance cubemap pass has no stable
-		// screen space, so it takes plain midpoint sampling -- it only feeds ambient light,
-		// where banding cannot be seen anyway.
-		float jitter = AT_CUBEMAP_PASS
-				? 0.5
-				: interleaved_gradient_noise(FRAGCOORD.xy);
+		// Plain midpoint sampling -- no per-pixel dither. planet_shadow() already softens its
+		// edge analytically (shadow_softness, a smoothstep, not a hard step), which was the
+		// actual source of the banding this jitter was originally added to hide. At only
+		// VIEW_STEPS=10, dithering the sample phase turned out to trade that banding for
+		// visible per-pixel grain instead (worst near the ground, where density falls off
+		// fast within a single step) -- for a discontinuity that no longer exists, so it is
+		// no longer needed. Left interleaved_gradient_noise() in atmosphere_common.gdshaderinc
+		// for anything that still wants real dither (e.g. clouds' cloud_jitter).
+		float jitter = 0.5;
 		atmosphere_scatter(ro, rd, t_start, t_end, jitter, inscatter, transmittance);
 	}
 

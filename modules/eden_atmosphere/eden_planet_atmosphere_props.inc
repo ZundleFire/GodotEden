@@ -36,7 +36,7 @@ EDEN_ATMO_U_VEC3(rayleigh_wavelengths, 680.0, 550.0, 440.0, "Scattering")
 // =========================================================================================
 EDEN_ATMO_U_COLOR(sun_tint, 1.0, 1.0, 1.0, "Sun")
 EDEN_ATMO_U_FLOAT(sun_intensity, 22.0, "0.0,100.0,0.1", "Sun")
-EDEN_ATMO_U_FLOAT(sun_angular_radius, 0.02, "0.001,0.2,0.0005,radians_as_degrees", "Sun")
+EDEN_ATMO_U_FLOAT(sun_angular_radius, 0.02, "0.05,15.0,0.01,radians_as_degrees", "Sun")
 // Kept separate from sun_intensity: that is a coefficient inside the scattering integral, not
 // a surface brightness. Sharing one value makes the disc vanish into the horizon glow at sunset.
 EDEN_ATMO_U_FLOAT(sun_disc_brightness, 30.0, "1.0,200.0,0.5", "Sun")
@@ -53,7 +53,7 @@ EDEN_ATMO_U_FLOAT(shadow_softness, 600.0, "0.0,4000.0,1.0,suffix:m", "Sun")
 EDEN_ATMO_L_BOOL(moonb_enabled, false, "Moon B")
 EDEN_ATMO_U_COLOR(moonb_tint, 1.0, 0.95, 0.9, "Moon B")
 EDEN_ATMO_U_FLOAT(moonb_intensity, 1.0, "0.0,10.0,0.01", "Moon B")
-EDEN_ATMO_U_FLOAT(moonb_angular_radius, 0.018, "0.001,0.2,0.0005,radians_as_degrees", "Moon B")
+EDEN_ATMO_U_FLOAT(moonb_angular_radius, 0.018, "0.05,15.0,0.01,radians_as_degrees", "Moon B")
 EDEN_ATMO_U_FLOAT(moonb_disc_brightness, 2.5, "0.1,200.0,0.01", "Moon B")
 EDEN_ATMO_U_FLOAT(moonb_limb_darkening, 0.3, "0.0,1.0,0.01", "Moon B")
 EDEN_ATMO_U_FLOAT(moonb_contrast, 1.0, "0.0,4.0,0.01", "Moon B")
@@ -81,7 +81,7 @@ EDEN_ATMO_L_BOOL(drive_moonb_light, true, "Moon B Light")
 EDEN_ATMO_L_BOOL(drive_moonb_rotation, true, "Moon B Light")
 
 EDEN_ATMO_U_FLOAT(moonb_glow_intensity, 0.4, "0.0,8.0,0.01", "Moon B Glow")
-EDEN_ATMO_U_FLOAT(moonb_glow_size, 0.07, "0.005,1.0,0.001,radians_as_degrees", "Moon B Glow")
+EDEN_ATMO_U_FLOAT(moonb_glow_size, 0.07, "0.05,45.0,0.01,radians_as_degrees", "Moon B Glow")
 EDEN_ATMO_U_FLOAT(moonb_halo_intensity, 0.0, "0.0,4.0,0.01", "Moon B Glow")
 
 // =========================================================================================
@@ -92,10 +92,10 @@ EDEN_ATMO_U_FLOAT(moonb_halo_intensity, 0.0, "0.0,4.0,0.01", "Moon B Glow")
 // =========================================================================================
 EDEN_ATMO_L_BOOL(sun2_enabled, false, "Sun 2")
 EDEN_ATMO_U_COLOR(sun2_tint, 0.55, 0.70, 1.0, "Sun 2")
-EDEN_ATMO_U_FLOAT(sun2_angular_radius, 0.012, "0.001,0.2,0.0005,radians_as_degrees", "Sun 2")
+EDEN_ATMO_U_FLOAT(sun2_angular_radius, 0.012, "0.05,15.0,0.01,radians_as_degrees", "Sun 2")
 EDEN_ATMO_U_FLOAT(sun2_disc_brightness, 30.0, "1.0,200.0,0.5", "Sun 2")
 EDEN_ATMO_U_FLOAT(sun2_glow_intensity, 0.5, "0.0,8.0,0.01", "Sun 2")
-EDEN_ATMO_U_FLOAT(sun2_glow_size, 0.1, "0.005,1.0,0.001,radians_as_degrees", "Sun 2")
+EDEN_ATMO_U_FLOAT(sun2_glow_size, 0.1, "0.05,45.0,0.01,radians_as_degrees", "Sun 2")
 EDEN_ATMO_U_FLOAT(sun2_corona_intensity, 1.2, "0.0,16.0,0.01", "Sun 2")
 // Offset from the primary sun's direction, in its own sky-relative azimuth/elevation -- "parked"
 // near the main sun rather than needing a separate orbit to animate.
@@ -119,7 +119,7 @@ EDEN_ATMO_L_BOOL(drive_sun2_rotation, true, "Sun 2 Light")
 // =========================================================================================
 EDEN_ATMO_L_BOOL(parent_planet_enabled, false, "Parent Planet")
 EDEN_ATMO_U_VEC3(parent_planet_direction, 0.0, 0.5, 0.866, "Parent Planet")
-EDEN_ATMO_U_FLOAT(parent_planet_angular_radius, 0.3, "0.01,1.5,0.001,radians_as_degrees", "Parent Planet")
+EDEN_ATMO_U_FLOAT(parent_planet_angular_radius, 0.3, "0.5,90.0,0.01,radians_as_degrees", "Parent Planet")
 EDEN_ATMO_U_VEC3(parent_planet_up, 0.0, 1.0, 0.0, "Parent Planet")
 EDEN_ATMO_U_FLOAT(parent_planet_brightness, 1.6, "0.05,20.0,0.01", "Parent Planet")
 EDEN_ATMO_U_FLOAT(parent_planet_limb_darkening, 0.25, "0.0,1.0,0.01", "Parent Planet")
@@ -144,7 +144,7 @@ EDEN_ATMO_U_COLOR(parent_planet_land_low, 0.22, 0.42, 0.20, "Parent Planet Surfa
 EDEN_ATMO_U_COLOR(parent_planet_land_high, 0.62, 0.55, 0.38, "Parent Planet Surface")
 EDEN_ATMO_U_COLOR(parent_planet_ice_color, 0.92, 0.94, 0.97, "Parent Planet Surface")
 // The planet's own spin, independent of where it sits in the sky.
-EDEN_ATMO_U_FLOAT(parent_planet_rotation, 0.0, "-6.283,6.283,0.001,radians_as_degrees", "Parent Planet Surface")
+EDEN_ATMO_U_FLOAT(parent_planet_rotation, 0.0, "-360.0,360.0,0.05,radians_as_degrees", "Parent Planet Surface")
 // Radians/second the surface (and, faster/slower, the clouds) spin -- a slowly "alive" planet.
 EDEN_ATMO_L_FLOAT(parent_planet_band_speed, 0.01, "-1.0,1.0,0.0001", "Parent Planet Surface")
 // Posterised lighting steps, the pixel-art shading look. 1 = smooth.
@@ -167,7 +167,7 @@ EDEN_ATMO_U_COLOR(parent_planet_atmosphere_color, 0.55, 0.75, 1.0, "Parent Plane
 EDEN_ATMO_U_FLOAT(parent_planet_atmosphere_power, 4.0, "0.5,16.0,0.01", "Parent Planet Atmosphere")
 EDEN_ATMO_U_FLOAT(parent_planet_atmosphere_intensity, 1.0, "0.0,4.0,0.01", "Parent Planet Atmosphere")
 EDEN_ATMO_U_FLOAT(parent_planet_glow_intensity, 0.15, "0.0,8.0,0.01", "Parent Planet Atmosphere")
-EDEN_ATMO_U_FLOAT(parent_planet_glow_size, 0.05, "0.005,1.0,0.001,radians_as_degrees", "Parent Planet Atmosphere")
+EDEN_ATMO_U_FLOAT(parent_planet_glow_size, 0.05, "0.05,45.0,0.01,radians_as_degrees", "Parent Planet Atmosphere")
 
 // =========================================================================================
 // Sky appearance
@@ -264,7 +264,7 @@ EDEN_ATMO_L_BOOL(drive_sun_rotation, true, "Sun Light")
 // the cool night cast belongs to moon_light_color, not to the body itself.
 EDEN_ATMO_U_COLOR(moon_tint, 1.0, 0.98, 0.95, "Moon")
 EDEN_ATMO_U_FLOAT(moon_intensity, 1.0, "0.0,10.0,0.01", "Moon")
-EDEN_ATMO_U_FLOAT(moon_angular_radius, 0.05, "0.001,0.2,0.0005,radians_as_degrees", "Moon")
+EDEN_ATMO_U_FLOAT(moon_angular_radius, 0.05, "0.05,15.0,0.01,radians_as_degrees", "Moon")
 // 2.5, not the old 15: that value was tuned for a flat untextured disc. With texture albedo and
 // Lommel-Seeliger reflectance 15 clips the whole moon to white and erases the maria; 2.5 was
 // verified by render to keep surface detail at full moon.
@@ -318,18 +318,18 @@ EDEN_ATMO_L_BOOL(drive_moon_rotation, true, "Moon Light")
 // Soft falloff around the disc. Lives in the sky shader, so it is extinguished and reddened along
 // the view ray exactly like the disc -- a setting sun's glow goes orange with it.
 EDEN_ATMO_U_FLOAT(sun_glow_intensity, 0.6, "0.0,8.0,0.01", "Sun Glow")
-EDEN_ATMO_U_FLOAT(sun_glow_size, 0.12, "0.005,1.0,0.001,radians_as_degrees", "Sun Glow")
+EDEN_ATMO_U_FLOAT(sun_glow_size, 0.12, "0.05,45.0,0.01,radians_as_degrees", "Sun Glow")
 // Tight bright rim hugging the disc. Pushes past the bloom threshold, which is what makes the sun
 // read as blinding rather than as a flat white circle.
 EDEN_ATMO_U_FLOAT(sun_corona_intensity, 1.5, "0.0,16.0,0.01", "Sun Glow")
 // 22-degree ice-crystal halo. Off by default for the sun -- on Earth it needs a cirrus layer.
 EDEN_ATMO_U_FLOAT(sun_halo_intensity, 0.0, "0.0,4.0,0.01", "Sun Glow")
 EDEN_ATMO_U_FLOAT(moon_glow_intensity, 0.5, "0.0,8.0,0.01", "Moon Glow")
-EDEN_ATMO_U_FLOAT(moon_glow_size, 0.08, "0.005,1.0,0.001,radians_as_degrees", "Moon Glow")
+EDEN_ATMO_U_FLOAT(moon_glow_size, 0.08, "0.05,45.0,0.01,radians_as_degrees", "Moon Glow")
 EDEN_ATMO_U_FLOAT(moon_halo_intensity, 0.05, "0.0,4.0,0.01", "Moon Glow")
 // Shared halo geometry. 22 degrees is the minimum-deviation angle of hexagonal ice plates.
-EDEN_ATMO_U_FLOAT(halo_radius, 0.3840, "0.05,1.5,0.0001,radians_as_degrees", "Halo")
-EDEN_ATMO_U_FLOAT(halo_width, 0.018, "0.001,0.2,0.0001,radians_as_degrees", "Halo")
+EDEN_ATMO_U_FLOAT(halo_radius, 0.3840, "1.0,90.0,0.01,radians_as_degrees", "Halo")
+EDEN_ATMO_U_FLOAT(halo_width, 0.018, "0.05,20.0,0.01,radians_as_degrees", "Halo")
 
 // =========================================================================================
 // Planetary height fog (post-process)
