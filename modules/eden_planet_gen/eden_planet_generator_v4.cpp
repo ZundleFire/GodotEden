@@ -1,0 +1,509 @@
+#include "eden_planet_generator_v4.h"
+
+#include "modules/voxel/storage/mixel4.h"
+#include "modules/voxel/storage/voxel_buffer.h"
+#include "modules/voxel/util/noise/voxel_terrain_noise.h"
+
+#include <cstddef>
+#include <vector>
+
+using namespace zylann::voxel;
+using Parameters = EdenPlanetGeneratorV4::Parameters;
+
+namespace {
+
+inline float ss(float e0, float e1, float x) {
+	const float t = CLAMP((x - e0) / (e1 - e0), 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+}
+
+// Per-thread scratch, reused across blocks
+struct SurfaceBuffers {
+	std::vector<float> height, ridge, erosion;
+	std::vector<float> radial, temperature, moisture, normalized_height, zeros;
+	std::vector<float> biome, ocean, coast, river, vegetation, desert, tundra, mountain, snow;
+
+	void resize_heights(size_t n) {
+		height.resize(n);
+		ridge.resize(n);
+		erosion.resize(n);
+	}
+	void resize_climate(size_t n) {
+		for (std::vector<float> *v : { &radial, &temperature, &moisture, &normalized_height, &zeros, &biome, &ocean,
+					 &coast, &river, &vegetation, &desert, &tundra, &mountain, &snow }) {
+			v->resize(n);
+		}
+		std::fill(zeros.begin(), zeros.end(), 0.0f);
+	}
+};
+
+TerrainHeightParams make_height_params(const Parameters &p) {
+	TerrainHeightParams hp = make_default_terrain_height_params();
+	hp.seed = p.seed;
+	hp.amplitude = p.terrain_amplitude;
+	hp.feature_scale = MAX(p.terrain_feature_scale, 1.0f);
+	hp.lacunarity = p.terrain_lacunarity;
+	hp.gain = p.terrain_gain;
+	hp.aesthetic_bias = p.terrain_aesthetic_bias;
+	hp.num_octaves = CLAMP(p.terrain_octaves, 1, 16);
+	hp.planet_radius = p.planet_radius;
+	hp.shaping.warp_strength = p.warp_strength;
+	hp.shaping.warp_scale = p.warp_scale;
+	hp.shaping.mountain_blend = p.mountain_blend;
+	hp.shaping.mountain_scale = p.mountain_scale;
+	hp.shaping.continent_blend = p.continent_blend;
+	hp.shaping.continent_scale = p.continent_scale;
+	hp.shaping.island_bias = p.island_bias;
+	hp.shaping.canyon_blend = p.canyon_blend;
+	hp.shaping.canyon_scale = p.canyon_scale;
+	hp.shaping.terrace_strength = p.terrace_strength;
+	hp.shaping.terrace_count = p.terrace_count;
+	return hp;
+}
+
+TerrainErosionParams make_erosion_params(const Parameters &p) {
+	TerrainErosionParams ep = make_default_terrain_erosion_params();
+	ep.seed = p.seed + 7919;
+	ep.planet_radius = p.planet_radius;
+	ep.tile_size = MAX(p.erosion_tile_size, 1.0f);
+	ep.strength = p.erosion_strength;
+	ep.detail = MAX(p.erosion_detail, 0.01f);
+	ep.octaves = CLAMP(p.erosion_octaves, 0, 12);
+	// Centered relief: the shader default -0.65 sinks everything by ~0.65 * magnitude (~660 m); V4 sets land coverage
+	// with terrain_base_height instead
+	ep.height_offset = 0.0f;
+	return ep;
+}
+
+// Relief used to normalize climate
+float get_climate_amplitude(const Parameters &p) {
+	return MAX(p.terrain_amplitude + p.terrain_base_height, 1.0f);
+}
+
+// Worst-case |height|, for culling blocks away from the surface
+float get_max_relief(const Parameters &p, const TerrainErosionParams &ep) {
+	float r = Math::abs(p.terrain_amplitude) + Math::abs(p.terrain_base_height) + Math::abs(p.sea_level);
+	if (p.use_erosion) {
+		r += get_terrain_erosion_max_height(ep) * Math::abs(p.erosion_height_scale);
+	}
+	return r + 64.0f;
+}
+
+// Pass 1, every voxel: height (m relative to planet_radius), ridge (-1..1), erosion (0..1)
+// No PlanetTectonics: probed along 2.5 m steps, oceanic_s / bias_s / border_dist_rad / boundary types jump by up to
+// 0.13 / 93 m / 2.4 km between Voronoi cells, and falloff_s is ~0 almost everywhere (99th percentile 0.03), so any
+// uplift driven by them makes cliffs. ponytail: bake tectonics into a smooth field (e.g. filtered cubemap) to bring
+// plates back.
+void compute_heights(
+		const Parameters &p, const float *x, const float *y, const float *z, unsigned int count, SurfaceBuffers &b) {
+	b.resize_heights(count);
+	float *h = b.height.data();
+
+	terrain_height_3d_series(x, y, z, h, count, make_height_params(p));
+	for (unsigned int i = 0; i < count; ++i) {
+		h[i] += p.terrain_base_height - p.planet_radius;
+	}
+
+	if (p.use_erosion) {
+		// Erosion writes its relief into a temp, then only lands on dry ground
+		b.radial.resize(count);
+		planet_erosion_series(x, y, z, b.radial.data(), b.ridge.data(), b.erosion.data(), count, make_erosion_params(p));
+		for (unsigned int i = 0; i < count; ++i) {
+			const float above_sea = h[i] - p.sea_level;
+			// Continental shelf fades it out so ocean floors stay smooth; the eroded relief is where mountains come from
+			const float mask = ss(-400.0f, 100.0f, above_sea);
+			h[i] += b.radial[i] * p.erosion_height_scale * mask;
+			b.ridge[i] *= mask;
+			b.erosion[i] = Math::lerp(0.5f, b.erosion[i], mask);
+		}
+	} else {
+		std::fill(b.ridge.begin(), b.ridge.end(), 0.0f);
+		std::fill(b.erosion.begin(), b.erosion.end(), 0.5f);
+	}
+}
+
+// Pass 2, near-surface voxels only: climate and biome masks from final heights
+void compute_climate(const Parameters &p, const float *x, const float *y, const float *z, const float *height,
+		unsigned int count, SurfaceBuffers &b) {
+	b.resize_climate(count);
+	for (unsigned int i = 0; i < count; ++i) {
+		b.radial[i] = p.planet_radius + height[i];
+	}
+	const float amplitude = get_climate_amplitude(p);
+
+	TerrainClimateParams cp = make_default_terrain_climate_params();
+	cp.seed = p.seed + 104729;
+	cp.amplitude = amplitude;
+	cp.sea_level = CLAMP(p.sea_level / amplitude, -1.0f, 1.0f);
+	cp.climate_scale = MAX(p.climate_scale, 1.0f);
+	cp.elevation_cooling = p.elevation_cooling;
+	cp.temperature_variation = p.temperature_variation;
+	cp.planet_radius = p.planet_radius;
+	terrain_climate_3d_series(x, y, z, b.radial.data(), b.temperature.data(), b.moisture.data(),
+			b.normalized_height.data(), count, cp);
+
+	terrain_material_blend_series(b.normalized_height.data(), b.temperature.data(), b.moisture.data(), b.zeros.data(),
+			b.biome.data(), b.ocean.data(), b.coast.data(), b.river.data(), b.vegetation.data(), b.desert.data(),
+			b.tundra.data(), b.mountain.data(), b.snow.data(), count, cp.sea_level * 0.5f + 0.5f, p.biome_contrast);
+}
+
+struct Mixel4 {
+	uint16_t indices;
+	uint16_t weights;
+};
+
+// Picks the 4 strongest of MAT_COUNT weights
+Mixel4 encode_materials(const float *w) {
+	int order[EdenPlanetGeneratorV4::MAT_COUNT];
+	for (int i = 0; i < EdenPlanetGeneratorV4::MAT_COUNT; ++i) {
+		order[i] = i;
+	}
+	for (int i = 0; i < 4; ++i) {
+		for (int j = i + 1; j < EdenPlanetGeneratorV4::MAT_COUNT; ++j) {
+			if (w[order[j]] > w[order[i]]) {
+				SWAP(order[i], order[j]);
+			}
+		}
+	}
+	const float sum = MAX(w[order[0]] + w[order[1]] + w[order[2]] + w[order[3]], 1e-6f);
+	uint8_t q[4];
+	for (int i = 0; i < 4; ++i) {
+		q[i] = uint8_t(CLAMP(w[order[i]] / sum * 255.0f + 0.5f, 0.0f, 255.0f));
+	}
+	return Mixel4{ zylann::voxel::mixel4::encode_indices_to_packed_u16(order[0], order[1], order[2], order[3]),
+		zylann::voxel::mixel4::encode_weights_to_packed_u16_lossy(q[0], q[1], q[2], q[3]) };
+}
+
+inline uint8_t unorm8(float v) {
+	return uint8_t(CLAMP(v * 255.0f + 0.5f, 0.0f, 255.0f));
+}
+
+// Layout documented in eden_planet_generator_v4.h
+inline uint32_t pack_surface_data(float erosion, float ridge, float moisture, float temperature) {
+	return uint32_t(unorm8(erosion)) | (uint32_t(unorm8(ridge * 0.5f + 0.5f)) << 8) |
+			(uint32_t(unorm8(moisture)) << 16) | (uint32_t(unorm8(temperature)) << 24);
+}
+
+void compute_material_weights(const Parameters &p, const SurfaceBuffers &b, unsigned int i, float ridge, float *w) {
+	const float ocean = b.ocean[i];
+	const float land = 1.0f - ocean;
+	const float snow = b.snow[i];
+	const float rock = CLAMP(b.mountain[i] * (1.0f - snow) + MAX(ridge, 0.0f) * p.ridge_rock_strength * land, 0.0f, 1.0f);
+	const float sediment = CLAMP(MAX(-ridge, 0.0f) * p.gully_sediment_strength * land, 0.0f, 1.0f);
+
+	w[EdenPlanetGeneratorV4::MAT_OCEAN_FLOOR] = ocean;
+	w[EdenPlanetGeneratorV4::MAT_SNOW] = snow;
+	w[EdenPlanetGeneratorV4::MAT_SAND] = MAX(b.coast[i], b.desert[i]) * (1.0f - snow);
+	w[EdenPlanetGeneratorV4::MAT_ROCK] = rock * (1.0f - snow);
+	w[EdenPlanetGeneratorV4::MAT_DIRT] = MAX(sediment, b.tundra[i] * 0.5f) * (1.0f - snow);
+	w[EdenPlanetGeneratorV4::MAT_MOSS] = b.vegetation[i] * ss(0.62f, 0.9f, b.moisture[i]) * (1.0f - rock);
+	float others = 0.0f;
+	for (int m = 1; m < EdenPlanetGeneratorV4::MAT_COUNT; ++m) {
+		others += w[m];
+	}
+	w[EdenPlanetGeneratorV4::MAT_GRASS] = land * MAX(1.0f - others, 0.05f);
+}
+
+} // namespace
+
+Parameters EdenPlanetGeneratorV4::get_parameters() const {
+	zylann::RWLockRead rlock(_parameters_lock);
+	return _parameters;
+}
+
+VoxelGenerator::Result EdenPlanetGeneratorV4::generate_block(VoxelQueryData input) {
+	Result result;
+	const Parameters p = get_parameters();
+
+	VoxelBuffer &buffer = input.voxel_buffer;
+	const Vector3i origin = input.origin_in_voxels;
+	const Vector3i size = buffer.get_size();
+	const int step = 1 << input.lod;
+	const float half_step = step * 0.5f;
+
+	const TerrainErosionParams ep = make_erosion_params(p);
+	const float max_relief = get_max_relief(p, ep);
+	float rock_w[MAT_COUNT] = { 0, 1, 0, 0, 0, 0, 0 };
+	const Mixel4 rock = encode_materials(rock_w);
+
+	// Cull blocks entirely inside or outside the relief shell
+	{
+		const float block_world_size = float(size.x * step);
+		const Vector3 center = Vector3(origin.x, origin.y, origin.z) + Vector3(1, 1, 1) * (block_world_size * 0.5f);
+		const float half_diag = block_world_size * 0.8660254f;
+		const float dist = center.length();
+		if (dist + half_diag < p.planet_radius - max_relief) {
+			buffer.clear_channel_f(VoxelBuffer::CHANNEL_SDF, -100.0f);
+			buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, rock.indices);
+			buffer.clear_channel(VoxelBuffer::CHANNEL_WEIGHTS, rock.weights);
+			result.max_lod_hint = true;
+			return result;
+		}
+		if (dist - half_diag > p.planet_radius + max_relief) {
+			buffer.clear_channel_f(VoxelBuffer::CHANNEL_SDF, 100.0f);
+			result.max_lod_hint = true;
+			return result;
+		}
+	}
+
+	const unsigned int count = size.x * size.y * size.z;
+	thread_local std::vector<float> px, py, pz;
+	thread_local std::vector<float> bx, by, bz, bh;
+	thread_local std::vector<unsigned int> band;
+	thread_local SurfaceBuffers sb;
+
+	px.resize(count);
+	py.resize(count);
+	pz.resize(count);
+	{
+		unsigned int i = 0;
+		for (int z = 0; z < size.z; ++z) {
+			for (int y = 0; y < size.y; ++y) {
+				for (int x = 0; x < size.x; ++x) {
+					px[i] = float(origin.x) + x * step + half_step;
+					py[i] = float(origin.y) + y * step + half_step;
+					pz[i] = float(origin.z) + z * step + half_step;
+					++i;
+				}
+			}
+		}
+	}
+
+	compute_heights(p, px.data(), py.data(), pz.data(), count, sb);
+
+	const bool write_surface_data = buffer.get_channel_depth(VoxelBuffer::CHANNEL_DATA6) == VoxelBuffer::DEPTH_32_BIT;
+	buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, rock.indices);
+	buffer.clear_channel(VoxelBuffer::CHANNEL_WEIGHTS, rock.weights);
+	if (write_surface_data) {
+		buffer.clear_channel(VoxelBuffer::CHANNEL_DATA6, pack_surface_data(0.5f, 0.0f, 0.5f, 0.5f));
+	}
+
+	// Transvoxel only reads materials in cells crossing the surface; the band covers slopes up to ~10:1
+	const float band_width = float(step) * 12.0f + 16.0f;
+	band.clear();
+	bx.clear();
+	by.clear();
+	bz.clear();
+	bh.clear();
+
+	{
+		unsigned int i = 0;
+		for (int z = 0; z < size.z; ++z) {
+			for (int y = 0; y < size.y; ++y) {
+				for (int x = 0; x < size.x; ++x) {
+					const float alt = Math::sqrt(px[i] * px[i] + py[i] * py[i] + pz[i] * pz[i]) - p.planet_radius;
+					const float sdf = alt - sb.height[i];
+					buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
+					if (p.bake_ocean_water && sdf > 0.0f && alt <= p.sea_level && sb.height[i] < p.sea_level) {
+						buffer.set_voxel_f(1.0f, x, y, z, VoxelBuffer::CHANNEL_DATA5);
+					}
+					if (Math::abs(sdf) < band_width) {
+						band.push_back(i);
+						bx.push_back(px[i]);
+						by.push_back(py[i]);
+						bz.push_back(pz[i]);
+						bh.push_back(sb.height[i]);
+					}
+					++i;
+				}
+			}
+		}
+	}
+
+	if (band.empty()) {
+		return result;
+	}
+
+	// Pass 2 only resizes climate buffers, pass 1 ridge/erosion stay valid (indexed by voxel)
+	compute_climate(p, bx.data(), by.data(), bz.data(), bh.data(), band.size(), sb);
+
+	const unsigned int area = size.x * size.y;
+	for (size_t k = 0; k < band.size(); ++k) {
+		const unsigned int i = band[k];
+		const int z = i / area;
+		const int y = (i % area) / size.x;
+		const int x = i % size.x;
+
+		float w[MAT_COUNT];
+		compute_material_weights(p, sb, k, sb.ridge[i], w);
+		const Mixel4 m = encode_materials(w);
+		buffer.set_voxel(m.indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
+		buffer.set_voxel(m.weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+		if (write_surface_data) {
+			buffer.set_voxel(pack_surface_data(sb.erosion[i], sb.ridge[i], sb.moisture[k], sb.temperature[k]), x, y, z,
+					VoxelBuffer::CHANNEL_DATA6);
+		}
+	}
+
+	return result;
+}
+
+int EdenPlanetGeneratorV4::get_used_channels_mask() const {
+	return (1 << VoxelBuffer::CHANNEL_SDF) | (1 << VoxelBuffer::CHANNEL_INDICES) | (1 << VoxelBuffer::CHANNEL_WEIGHTS) |
+			(1 << VoxelBuffer::CHANNEL_DATA5) | (1 << VoxelBuffer::CHANNEL_DATA6);
+}
+
+Dictionary EdenPlanetGeneratorV4::sample_surface(Vector3 direction) const {
+	const Parameters p = get_parameters();
+	const Vector3 pos = direction.normalized() * p.planet_radius;
+	const float x = pos.x, y = pos.y, z = pos.z;
+	SurfaceBuffers b;
+	compute_heights(p, &x, &y, &z, 1, b);
+	const float height = b.height[0];
+	const float ridge = b.ridge[0];
+	const float erosion = b.erosion[0];
+	compute_climate(p, &x, &y, &z, &height, 1, b);
+
+	Dictionary d;
+	d["height"] = height;
+	d["ridge"] = ridge;
+	d["erosion"] = erosion;
+	d["temperature"] = b.temperature[0];
+	d["moisture"] = b.moisture[0];
+	d["biome_id"] = int(b.biome[0]);
+	return d;
+}
+
+// Properties ----------------------------------------------------------------------------------------------------------
+
+namespace {
+
+enum PropKind { PK_GROUP, PK_FLOAT, PK_INT, PK_BOOL };
+
+struct PropDef {
+	const char *name;
+	PropKind kind;
+	size_t offset;
+	const char *hint_range;
+};
+
+#define V4_GROUP(label) { label, PK_GROUP, 0, "" }
+#define V4_PROP(name, kind, hint) { #name, kind, offsetof(Parameters, name), hint }
+
+const PropDef g_prop_defs[] = {
+	V4_GROUP("Planet"),
+	V4_PROP(planet_radius, PK_FLOAT, "100,1000000,1,or_greater"),
+	V4_PROP(seed, PK_INT, ""),
+	V4_PROP(sea_level, PK_FLOAT, "-5000,5000,1"),
+	V4_PROP(bake_ocean_water, PK_BOOL, ""),
+	V4_GROUP("Terrain"),
+	V4_PROP(terrain_base_height, PK_FLOAT, "-5000,5000,1"),
+	V4_PROP(terrain_amplitude, PK_FLOAT, "0,20000,1"),
+	V4_PROP(terrain_feature_scale, PK_FLOAT, "10,200000,1"),
+	V4_PROP(terrain_octaves, PK_INT, "1,16,1"),
+	V4_PROP(terrain_lacunarity, PK_FLOAT, "1,4,0.01"),
+	V4_PROP(terrain_gain, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(terrain_aesthetic_bias, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(warp_strength, PK_FLOAT, "0,20000,1"),
+	V4_PROP(warp_scale, PK_FLOAT, "10,200000,1"),
+	V4_PROP(mountain_blend, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(mountain_scale, PK_FLOAT, "10,200000,1"),
+	V4_PROP(continent_blend, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(continent_scale, PK_FLOAT, "10,500000,1"),
+	V4_PROP(island_bias, PK_FLOAT, "-1,1,0.01"),
+	V4_PROP(canyon_blend, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(canyon_scale, PK_FLOAT, "10,200000,1"),
+	V4_PROP(terrace_strength, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(terrace_count, PK_FLOAT, "1,64,1"),
+	V4_GROUP("Erosion"),
+	V4_PROP(use_erosion, PK_BOOL, ""),
+	V4_PROP(erosion_height_scale, PK_FLOAT, "0,4,0.01"),
+	V4_PROP(erosion_tile_size, PK_FLOAT, "100,100000,1,or_greater"),
+	V4_PROP(erosion_strength, PK_FLOAT, "0,1,0.001"),
+	V4_PROP(erosion_detail, PK_FLOAT, "0.01,4,0.01"),
+	V4_PROP(erosion_octaves, PK_INT, "0,12,1"),
+	V4_GROUP("Climate & Materials"),
+	V4_PROP(climate_scale, PK_FLOAT, "10,500000,1"),
+	V4_PROP(elevation_cooling, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(temperature_variation, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(biome_contrast, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(ridge_rock_strength, PK_FLOAT, "0,2,0.01"),
+	V4_PROP(gully_sediment_strength, PK_FLOAT, "0,2,0.01"),
+};
+
+#undef V4_GROUP
+#undef V4_PROP
+
+const PropDef *find_prop(const StringName &name) {
+	for (const PropDef &d : g_prop_defs) {
+		if (d.kind != PK_GROUP && name == StringName(d.name)) {
+			return &d;
+		}
+	}
+	return nullptr;
+}
+
+} // namespace
+
+bool EdenPlanetGeneratorV4::_set(const StringName &p_name, const Variant &p_value) {
+	const PropDef *d = find_prop(p_name);
+	if (d == nullptr) {
+		return false;
+	}
+	{
+		zylann::RWLockWrite wlock(_parameters_lock);
+		char *field = reinterpret_cast<char *>(&_parameters) + d->offset;
+		switch (d->kind) {
+			case PK_FLOAT:
+				*reinterpret_cast<float *>(field) = float(p_value);
+				break;
+			case PK_INT:
+				*reinterpret_cast<int *>(field) = int(p_value);
+				break;
+			case PK_BOOL:
+				*reinterpret_cast<bool *>(field) = bool(p_value);
+				break;
+			default:
+				break;
+		}
+	}
+	emit_changed();
+	return true;
+}
+
+bool EdenPlanetGeneratorV4::_get(const StringName &p_name, Variant &r_ret) const {
+	const PropDef *d = find_prop(p_name);
+	if (d == nullptr) {
+		return false;
+	}
+	zylann::RWLockRead rlock(_parameters_lock);
+	const char *field = reinterpret_cast<const char *>(&_parameters) + d->offset;
+	switch (d->kind) {
+		case PK_FLOAT:
+			r_ret = *reinterpret_cast<const float *>(field);
+			break;
+		case PK_INT:
+			r_ret = *reinterpret_cast<const int *>(field);
+			break;
+		case PK_BOOL:
+			r_ret = *reinterpret_cast<const bool *>(field);
+			break;
+		default:
+			return false;
+	}
+	return true;
+}
+
+void EdenPlanetGeneratorV4::_get_property_list(List<PropertyInfo> *p_list) const {
+	for (const PropDef &d : g_prop_defs) {
+		switch (d.kind) {
+			case PK_GROUP:
+				p_list->push_back(PropertyInfo(Variant::NIL, d.name, PROPERTY_HINT_NONE, "", PROPERTY_USAGE_GROUP));
+				break;
+			case PK_FLOAT:
+				p_list->push_back(PropertyInfo(Variant::FLOAT, d.name, PROPERTY_HINT_RANGE, d.hint_range));
+				break;
+			case PK_INT:
+				p_list->push_back(PropertyInfo(
+						Variant::INT, d.name, d.hint_range[0] != 0 ? PROPERTY_HINT_RANGE : PROPERTY_HINT_NONE, d.hint_range));
+				break;
+			case PK_BOOL:
+				p_list->push_back(PropertyInfo(Variant::BOOL, d.name));
+				break;
+		}
+	}
+}
+
+void EdenPlanetGeneratorV4::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("sample_surface", "direction"), &EdenPlanetGeneratorV4::sample_surface);
+}

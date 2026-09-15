@@ -8,6 +8,24 @@ env_eden_planet_gen = env_modules.Clone()
 # Voxel module headers require ZN_GODOT to resolve cross-platform macros.
 env_eden_planet_gen.Append(CPPDEFINES=["ZN_GODOT"])
 
+# CRITICAL: must match modules/voxel/common.py's own CPPDEFINES exactly for any flag that
+# gates a conditionally-compiled virtual method in a voxel base class (e.g. VoxelGenerator).
+# eden_planet_gen's classes (EdenPlanetGeneratorV1/V2/V3) derive from zylann::voxel::VoxelGenerator,
+# whose header (modules/voxel/generators/voxel_generator.h) wraps several virtual methods --
+# including generate_broad_block(), used by every voxel data-generation task -- in
+# `#ifdef VOXEL_ENABLE_GPU`. Without this define also applied here, this module's translation
+# units see a VoxelGenerator with a DIFFERENT (shorter) vtable than modules/voxel's own
+# translation units do, since voxel_gpu defaults to on. That ODR/ABI mismatch silently
+# corrupts virtual dispatch into any class defined here: calls like generator->generate_broad_block()
+# from voxel's own code land on the wrong vtable slot (confirmed via a virtual-vs-explicit-
+# non-virtual-call diagnostic: the virtual call consistently returned true where the real,
+# correct implementation always returns false), causing every LOD0 block for every
+# EdenPlanetGenerator* to take the "trivially uniform" early-out and skip real generation
+# entirely -- the actual root cause of terrain/water data silently not matching what the
+# generator produces when called directly.
+if env["voxel_gpu"]:
+	env_eden_planet_gen.Append(CPPDEFINES={"VOXEL_ENABLE_GPU": 1})
+
 module_obj = []
 env_eden_planet_gen.add_source_files(module_obj, "*.cpp")
 
