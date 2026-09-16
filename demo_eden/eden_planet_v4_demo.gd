@@ -11,11 +11,16 @@ const CAPTURE_FRAME := 900
 
 var _frame := 0
 var _capture_path := ""
+# EDEN_V4_FRAMES: how many frames to let the terrain stream before the screenshot
+var _capture_frame := CAPTURE_FRAME
 var _gen: EdenPlanetGeneratorV4
 
 
 func _ready() -> void:
 	_capture_path = OS.get_environment("EDEN_V4_CAPTURE")
+	var frames_env := OS.get_environment("EDEN_V4_FRAMES")
+	if frames_env != "":
+		_capture_frame = frames_env.to_int()
 	_gen = EdenPlanetGeneratorV4.new()
 	_gen.planet_radius = PLANET_RADIUS
 	# EDEN_V4_SET="use_erosion=false;erosion_strength=0.3" overrides generator properties
@@ -104,10 +109,12 @@ func _build_lighting() -> void:
 
 func _process(_delta: float) -> void:
 	_frame += 1
+	if _frame % 120 == 0:
+		print("EDEN_V4_DEMO: frame ", _frame, " of ", _capture_frame)
 	if _capture_path == "":
 		return
-	if _frame == CAPTURE_FRAME:
+	if _frame == _capture_frame:
 		var err := get_viewport().get_texture().get_image().save_png(_capture_path)
 		print("EDEN_V4_DEMO: screenshot ", _capture_path, " err=", err)
-	elif _frame > CAPTURE_FRAME + 2:
+	elif _frame > _capture_frame + 2:
 		get_tree().quit()
