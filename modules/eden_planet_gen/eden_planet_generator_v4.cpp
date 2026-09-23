@@ -4,6 +4,8 @@
 #include "modules/voxel/storage/voxel_buffer.h"
 #include "modules/voxel/util/noise/voxel_terrain_noise.h"
 
+#include <cfloat>
+#include <climits>
 #include <cstddef>
 #include <vector>
 
@@ -204,6 +206,179 @@ void compute_material_weights(const Parameters &p, const SurfaceBuffers &b, unsi
 	w[EdenPlanetGeneratorV4::MAT_GRASS] = land * MAX(1.0f - others, 0.05f);
 }
 
+// Transvoxel only reads materials in cells crossing the surface; the band covers slopes up to ~10:1
+inline float get_material_band_width(int step) {
+	return float(step) * 12.0f + 16.0f;
+}
+
+// Every surface attribute is a function of direction only: each noise stage normalizes its input position. So they are
+// evaluated on a lattice of directions, a few nodes per voxel footprint at this LOD, then interpolated per voxel: about
+// 4 * size^2 noise evaluations instead of size^3. Each voxel picks its cube face and lattice cell from its own position and
+// the lattice depends only on the LOD, so a voxel shared by neighboring blocks gets the same value in each (no seams).
+// Returns false when the lattice would not save work (blocks spanning a wide cone of directions, near the core).
+bool generate_on_lattice(const Parameters &p, VoxelBuffer &buffer, const Vector3i size, const int step, const float *px,
+		const float *py, const float *pz, bool write_surface_data) {
+	const unsigned int count = size.x * size.y * size.z;
+	// Lattice nodes per voxel footprint. Bilinear error falls with its square: at 1, coarse LODs were off by up to half a
+	// voxel near steep relief
+	const float nodes_per_voxel = 2.0f;
+	// Equal-angle cube map (u = angle on the face, not tan of it): node spacing on the sphere stays within ~1.4x across a
+	// face, where the plain gnomonic map crowds nodes 3x toward the edges and blew the node budget there
+	const float inv_du = p.planet_radius * nodes_per_voxel / float(step);
+
+	struct Rect {
+		int u0 = INT_MAX, v0 = INT_MAX, u1 = INT_MIN, v1 = INT_MIN;
+		int w = 0;
+		unsigned int base = 0;
+	};
+	Rect rects[6];
+	thread_local std::vector<uint8_t> vface;
+	thread_local std::vector<float> vu, vv;
+	vface.resize(count);
+	vu.resize(count);
+	vv.resize(count);
+	float min_r = FLT_MAX;
+	float max_r = 0.0f;
+	for (unsigned int i = 0; i < count; ++i) {
+		const float c[3] = { px[i], py[i], pz[i] };
+		const int a = Math::abs(c[0]) >= Math::abs(c[1]) && Math::abs(c[0]) >= Math::abs(c[2])
+				? 0
+				: (Math::abs(c[1]) >= Math::abs(c[2]) ? 1 : 2);
+		const float major = Math::abs(c[a]);
+		if (major == 0.0f) {
+			return false;
+		}
+		const int face = a * 2 + (c[a] < 0.0f ? 1 : 0);
+		const float fu = Math::atan(c[(a + 1) % 3] / major) * inv_du;
+		const float fv = Math::atan(c[(a + 2) % 3] / major) * inv_du;
+		vface[i] = face;
+		vu[i] = fu;
+		vv[i] = fv;
+		Rect &r = rects[face];
+		const int iu = int(Math::floor(fu));
+		const int iv = int(Math::floor(fv));
+		r.u0 = MIN(r.u0, iu);
+		r.u1 = MAX(r.u1, iu + 1);
+		r.v0 = MIN(r.v0, iv);
+		r.v1 = MAX(r.v1, iv + 1);
+		const float rad = Math::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+		min_r = MIN(min_r, rad);
+		max_r = MAX(max_r, rad);
+	}
+
+	int64_t total = 0;
+	for (Rect &r : rects) {
+		if (r.u0 > r.u1) {
+			continue;
+		}
+		r.w = r.u1 - r.u0 + 1;
+		r.base = static_cast<unsigned int>(total);
+		total += int64_t(r.w) * (r.v1 - r.v0 + 1);
+	}
+	// A node costs about what a voxel does on the exact path
+	if (total > count / 2) {
+		return false;
+	}
+	const unsigned int node_count = static_cast<unsigned int>(total);
+
+	thread_local std::vector<float> nx, ny, nz;
+	thread_local SurfaceBuffers nsb;
+	nx.resize(node_count);
+	ny.resize(node_count);
+	nz.resize(node_count);
+	for (int face = 0; face < 6; ++face) {
+		const Rect &r = rects[face];
+		if (r.w == 0) {
+			continue;
+		}
+		const int a = face / 2;
+		const float s = (face & 1) ? -1.0f : 1.0f;
+		unsigned int n = r.base;
+		for (int v = r.v0; v <= r.v1; ++v) {
+			for (int u = r.u0; u <= r.u1; ++u) {
+				float d[3];
+				d[a] = s;
+				d[(a + 1) % 3] = Math::tan(float(u) / inv_du);
+				d[(a + 2) % 3] = Math::tan(float(v) / inv_du);
+				const float k = p.planet_radius / Math::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+				nx[n] = d[0] * k;
+				ny[n] = d[1] * k;
+				nz[n] = d[2] * k;
+				++n;
+			}
+		}
+	}
+	compute_heights(p, nx.data(), ny.data(), nz.data(), node_count, nsb);
+
+	// Interpolated heights stay within the node range, so a block entirely above or below it has no surface
+	float min_h = FLT_MAX;
+	float max_h = -FLT_MAX;
+	for (unsigned int n = 0; n < node_count; ++n) {
+		min_h = MIN(min_h, nsb.height[n]);
+		max_h = MAX(max_h, nsb.height[n]);
+	}
+	const float min_alt = min_r - p.planet_radius;
+	const float max_alt = max_r - p.planet_radius;
+	if (min_alt > max_h && !(p.bake_ocean_water && min_alt <= p.sea_level)) {
+		buffer.clear_channel_f(VoxelBuffer::CHANNEL_SDF, 100.0f);
+		return true;
+	}
+	if (max_alt < min_h) {
+		buffer.clear_channel_f(VoxelBuffer::CHANNEL_SDF, -100.0f);
+		return true;
+	}
+
+	compute_climate(p, nx.data(), ny.data(), nz.data(), nsb.height.data(), node_count, nsb);
+	thread_local std::vector<Mixel4> node_mix;
+	thread_local std::vector<uint32_t> node_data;
+	node_mix.resize(node_count);
+	node_data.resize(node_count);
+	for (unsigned int n = 0; n < node_count; ++n) {
+		float w[EdenPlanetGeneratorV4::MAT_COUNT];
+		compute_material_weights(p, nsb, n, nsb.ridge[n], w);
+		node_mix[n] = encode_materials(w);
+		node_data[n] = pack_surface_data(nsb.erosion[n], nsb.ridge[n], nsb.moisture[n], nsb.temperature[n]);
+	}
+
+	const float band_width = get_material_band_width(step);
+	unsigned int i = 0;
+	for (int z = 0; z < size.z; ++z) {
+		for (int y = 0; y < size.y; ++y) {
+			for (int x = 0; x < size.x; ++x) {
+				const Rect &r = rects[vface[i]];
+				const float fu = vu[i];
+				const float fv = vv[i];
+				const int iu = int(Math::floor(fu));
+				const int iv = int(Math::floor(fv));
+				const float tu = fu - iu;
+				const float tv = fv - iv;
+				const unsigned int n00 = r.base + (iv - r.v0) * r.w + (iu - r.u0);
+				const unsigned int n01 = n00 + r.w;
+				const float *h = nsb.height.data();
+				const float height = Math::lerp(Math::lerp(h[n00], h[n00 + 1], tu), Math::lerp(h[n01], h[n01 + 1], tu), tv);
+
+				const float alt = Math::sqrt(px[i] * px[i] + py[i] * py[i] + pz[i] * pz[i]) - p.planet_radius;
+				const float sdf = alt - height;
+				buffer.set_voxel_f(sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
+				if (p.bake_ocean_water && sdf > 0.0f && alt <= p.sea_level && height < p.sea_level) {
+					buffer.set_voxel_f(1.0f, x, y, z, VoxelBuffer::CHANNEL_DATA5);
+				}
+				if (Math::abs(sdf) < band_width) {
+					// Nearest node: material indices don't interpolate
+					const unsigned int n = (tv < 0.5f ? n00 : n01) + (tu < 0.5f ? 0 : 1);
+					buffer.set_voxel(node_mix[n].indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
+					buffer.set_voxel(node_mix[n].weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+					if (write_surface_data) {
+						buffer.set_voxel(node_data[n], x, y, z, VoxelBuffer::CHANNEL_DATA6);
+					}
+				}
+				++i;
+			}
+		}
+	}
+	return true;
+}
+
 } // namespace
 
 Parameters EdenPlanetGeneratorV4::get_parameters() const {
@@ -269,8 +444,6 @@ VoxelGenerator::Result EdenPlanetGeneratorV4::generate_block(VoxelQueryData inpu
 		}
 	}
 
-	compute_heights(p, px.data(), py.data(), pz.data(), count, sb);
-
 	const bool write_surface_data = buffer.get_channel_depth(VoxelBuffer::CHANNEL_DATA6) == VoxelBuffer::DEPTH_32_BIT;
 	buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, rock.indices);
 	buffer.clear_channel(VoxelBuffer::CHANNEL_WEIGHTS, rock.weights);
@@ -278,8 +451,13 @@ VoxelGenerator::Result EdenPlanetGeneratorV4::generate_block(VoxelQueryData inpu
 		buffer.clear_channel(VoxelBuffer::CHANNEL_DATA6, pack_surface_data(0.5f, 0.0f, 0.5f, 0.5f));
 	}
 
-	// Transvoxel only reads materials in cells crossing the surface; the band covers slopes up to ~10:1
-	const float band_width = float(step) * 12.0f + 16.0f;
+	if (generate_on_lattice(p, buffer, size, step, px.data(), py.data(), pz.data(), write_surface_data)) {
+		return result;
+	}
+
+	// Exact path, one evaluation per voxel
+	compute_heights(p, px.data(), py.data(), pz.data(), count, sb);
+	const float band_width = get_material_band_width(step);
 	band.clear();
 	bx.clear();
 	by.clear();
