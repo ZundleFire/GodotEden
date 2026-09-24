@@ -345,7 +345,7 @@ void RendererSceneRenderRD::_render_buffers_ensure_screen_texture(const RenderDa
 	}
 }
 
-void RendererSceneRenderRD::_render_buffers_copy_screen_texture(const RenderDataRD *p_render_data) {
+void RendererSceneRenderRD::_render_buffers_copy_screen_texture(const RenderDataRD *p_render_data, bool p_generate_mipmaps) {
 	Ref<RenderSceneBuffersRD> rb = p_render_data->render_buffers;
 	ERR_FAIL_COND(rb.is_null());
 
@@ -373,7 +373,7 @@ void RendererSceneRenderRD::_render_buffers_copy_screen_texture(const RenderData
 
 	for (uint32_t v = 0; v < rb->get_view_count(); v++) {
 		RID texture = rb->get_internal_texture(v);
-		int mipmaps = int(rb->get_texture_format(RB_SCOPE_BUFFERS, texture_name).mipmaps);
+		int mipmaps = p_generate_mipmaps ? int(rb->get_texture_format(RB_SCOPE_BUFFERS, texture_name).mipmaps) : 1;
 		RID dest = rb->get_texture_slice(RB_SCOPE_BUFFERS, texture_name, v, 0);
 
 		if (can_use_storage) {

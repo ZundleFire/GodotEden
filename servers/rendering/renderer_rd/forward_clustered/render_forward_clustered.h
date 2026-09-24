@@ -410,6 +410,7 @@ private:
 		uint32_t voxelgis_used = 0;
 
 		bool used_screen_texture = false;
+		bool used_screen_texture_mipmaps = false;
 		bool used_normal_texture = false;
 		bool used_depth_texture = false;
 		bool used_sss = false;
