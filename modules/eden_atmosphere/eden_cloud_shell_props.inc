@@ -32,7 +32,7 @@ EDEN_CLOUD_U_FLOAT(cloud_coverage, 0.40, "0.0,1.0,0.001", "Shape")
 EDEN_CLOUD_U_FLOAT(cloud_edge_hardness, 0.14, "0.0,1.0,0.001", "Shape")
 // Cel-steps the SHADING (not the density -- banding density bands the alpha and draws
 // topographic contour rings). 32 is effectively smooth.
-EDEN_CLOUD_U_FLOAT(cloud_facet_levels, 5.0, "1.0,32.0,1.0", "Shape")
+EDEN_CLOUD_U_FLOAT(cloud_facet_levels, 9.0, "1.0,32.0,1.0", "Shape")
 // Parallax separation between layers: too little reads as one flat sheet, too much and the
 // layers visibly detach.
 EDEN_CLOUD_U_FLOAT(cloud_layer_offset, 0.0, "0.0,2.0,0.01", "Shape")
@@ -46,6 +46,8 @@ EDEN_CLOUD_U_FLOAT(cloud_edge_opacity, 0.12, "0.0,1.0,0.01", "Shape")
 // same period and the texture tiling becomes obvious.
 EDEN_CLOUD_U_FLOAT(cloud_detail_scale, 2.37, "1.1,8.0,0.01", "Shape")
 EDEN_CLOUD_U_FLOAT(cloud_detail_weight, 0.25, "0.0,1.0,0.01", "Shape")
+EDEN_CLOUD_U_FLOAT(cloud_micro_scale, 5.19, "1.1,12.0,0.01", "Shape")
+EDEN_CLOUD_U_FLOAT(cloud_micro_weight, 0.18, "0.0,1.0,0.01", "Shape")
 // Main quality/cost dial: 1 is a flat sheet, 3 reads as volume, 5+ smoother but linearly dearer.
 EDEN_CLOUD_U_INT(cloud_layers, 3, "1,8,1", "Shape")
 // Fraction of slab height, from the floor, over which density ramps up from zero. Avoids a
@@ -142,6 +144,11 @@ EDEN_CLOUD_U_COLOR(cloud_albedo, 1.0, 0.99, 0.97, "Lighting")
 // coefficient inside the scattering integral, not a surface brightness, and reusing it here
 // overdrives cloud by an order of magnitude and clips everything to flat white.
 EDEN_CLOUD_U_FLOAT(cloud_sun_intensity, 2.4, "0.0,12.0,0.01", "Lighting")
+// Altitude (in rayleigh_scale_heights) at which the cloud's sunlight COLOUR is sampled; the deck's
+// own altitude wins when it is lower, so an Earth-like cloud/atmosphere ratio is unaffected. Raise
+// toward 8 for physically-pure behaviour (white clouds until the sun is well down on a thin-aired
+// planet), lower toward 0 to make the deck redden in lockstep with the ground. See the shader.
+EDEN_CLOUD_U_FLOAT(cloud_light_altitude, 1.0, "0.0,8.0,0.01", "Lighting")
 EDEN_CLOUD_U_FLOAT(cloud_ambient, 0.12, "0.0,1.0,0.001", "Lighting")
 EDEN_CLOUD_U_FLOAT(cloud_light_gain, 1.0, "0.0,4.0,0.01", "Lighting")
 // How much direct light a back-lit face keeps. 0 = black silhouettes, 1 = no front/back

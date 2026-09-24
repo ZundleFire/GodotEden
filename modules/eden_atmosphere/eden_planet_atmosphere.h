@@ -60,16 +60,6 @@ public:
 	void set_sky_shader_override(const Ref<Shader> &p_shader);
 	Ref<Shader> get_sky_shader_override() const;
 
-	// --- Deep space -------------------------------------------------------------------------
-	// Equirectangular panoramas, in Godot's own panorama convention (u = atan2(x,-z)/2pi,
-	// v = acos(y)/pi), so anything authored against PanoramaSkyMaterial drops in unchanged.
-	// Two slots so a starfield and a nebula can be layered and cross-faded independently.
-	// Both null -> the procedural star field is used, so the sky works with no art at all.
-	void set_space_panorama(const Ref<Texture2D> &p_texture);
-	Ref<Texture2D> get_space_panorama() const;
-	void set_space_overlay(const Ref<Texture2D> &p_texture);
-	Ref<Texture2D> get_space_overlay() const;
-
 	// --- Moon ------------------------------------------------------------------------------
 	// Either a photo of the moon filling a square image (moon_texture_equirect = false) or an
 	// equirectangular surface map (true). Null draws a plain grey sphere -- phases still work,
@@ -78,9 +68,6 @@ public:
 	Ref<Texture2D> get_moon_texture() const;
 	void set_moonb_texture(const Ref<Texture2D> &p_texture);
 	Ref<Texture2D> get_moonb_texture() const;
-	// Equirectangular surface map for the parent planet. Null uses the procedural gas-giant bands.
-	void set_parent_planet_texture(const Ref<Texture2D> &p_texture);
-	Ref<Texture2D> get_parent_planet_texture() const;
 
 	// --- Queries (also useful from script and tools) ---------------------------------------
 	Vector3 get_sun_direction() const;
@@ -176,15 +163,31 @@ private:
 	// lighting disagreeing at sunset.
 	Vector3 _beta_rayleigh() const;
 	float _beta_mie() const;
+	// Ozone: absorbs without scattering. Mirrors beta_ozone()/ozone_density() in
+	// atmosphere_common.gdshaderinc -- the two must stay in step or the CPU-driven sun light and
+	// fog will disagree with the sky the GPU draws.
+	Vector3 _beta_ozone() const;
+	float _ozone_density(float p_altitude) const;
 	Vector2 _ray_sphere(const Vector3 &p_ro, const Vector3 &p_rd, float p_radius) const;
 	// Direction-generic, so the moon light gets the same extinction and horizon occlusion as
 	// the sun. The _sun wrappers keep existing call sites unchanged.
-	Vector2 _optical_depth_along(const Vector3 &p_point, const Vector3 &p_dir) const;
+	Vector3 _optical_depth_along(const Vector3 &p_point, const Vector3 &p_dir) const;
 	float _planet_shadow_dir(const Vector3 &p_point, const Vector3 &p_dir) const;
-	Vector3 _transmittance_toward(const Vector3 &p_point, const Vector3 &p_dir) const;
+	// p_apply_shadow: whether to gate the result by _planet_shadow_dir() (is p_point itself
+	// eclipsed). Needed for the sky's own per-pixel rendering (a sky pixel really can be looking
+	// at a patch of space the planet eclipses). NOT needed -- and actively wrong -- for driving
+	// the single shared DirectionalLight3D that lights terrain: standard Lambertian N.L already
+	// darkens a sphere's far side per-fragment with no help from this, and gating the light's
+	// overall energy by one arbitrary reference point's eclipse status can zero out correctly-lit
+	// terrain elsewhere in frame for any view wide enough to see both hemispheres at once (root-
+	// caused this session -- see the definition for the full story).
+	Vector3 _transmittance_toward(const Vector3 &p_point, const Vector3 &p_dir, bool p_apply_shadow = true) const;
 	// Single-scattered sky radiance along a ray; a coarse CPU copy of atmosphere_scatter().
 	Vector3 _sky_radiance(const Vector3 &p_point, const Vector3 &p_dir) const;
-	Vector2 _optical_depth_to_sun(const Vector3 &p_point) const;
+	void _push_ocean_sky(const Ref<ShaderMaterial> &p_material);
+	Ref<Image> ocean_sky_image;
+	Ref<ImageTexture> ocean_sky_texture;
+	Vector3 _optical_depth_to_sun(const Vector3 &p_point) const;
 	float _planet_shadow(const Vector3 &p_point) const;
 	Vector3 _sun_transmittance(const Vector3 &p_point) const;
 	Vector3 _camera_planet_relative() const;
@@ -206,12 +209,12 @@ private:
 	NodePath moonb_light_path;
 	NodePath environment_path;
 	TypedArray<ShaderMaterial> linked_materials;
+	// Runtime-only, see _auto_link()
+	LocalVector<Ref<ShaderMaterial>> auto_linked_materials;
+	void _auto_link(const Ref<ShaderMaterial> &p_material);
 	Ref<Shader> sky_shader_override;
-	Ref<Texture2D> space_panorama;
-	Ref<Texture2D> space_overlay;
 	Ref<Texture2D> moon_texture;
 	Ref<Texture2D> moonb_texture;
-	Ref<Texture2D> parent_planet_texture;
 
 	Ref<ShaderMaterial> sky_material;
 	Ref<Sky> sky;
@@ -229,6 +232,12 @@ private:
 	MeshInstance3D *auto_planet_mesh = nullptr;
 	String auto_planet_mesh_signature;
 	Node *auto_cloud_shell = nullptr;
+	// Nodes that need the per-frame uniform push but are not owned by this one (ocean, clouds,
+	// rings). Found by a throttled whole-tree scan rather than a siblings-only one -- see
+	// _collect_linked_nodes().
+	LocalVector<ObjectID> linked_nodes;
+	double linked_rescan = 0.0;
+	void _collect_linked_nodes(double p_delta);
 	bool auto_created_environment = false;
 	Vector3 sun_direction = Vector3(0, 1, 0);
 	Vector3 sun2_direction = Vector3(0, 1, 0);
@@ -236,7 +245,6 @@ private:
 	// for texture orientation: a tidally locked moon keeps a fixed attitude relative to it.
 	Vector3 moon_orbit_normal = Vector3(0, 1, 0);
 	Vector3 moonb_orbit_normal = Vector3(0, 1, 0);
-	float parent_planet_band_phase = 0.0f;
 
 	// --- Generated members -----------------------------------------------------------------
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group) float m_name = m_default;

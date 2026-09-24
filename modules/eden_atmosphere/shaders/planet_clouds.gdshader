@@ -43,7 +43,11 @@ uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.40;
 // 0 = crisp, antialiased polygon edges at any distance. Higher = softer, fluffier edges.
 uniform float cloud_edge_hardness : hint_range(0.0, 1.0) = 0.14;
 // Density quantisation. Low values give flat poster-like facets; 32+ is effectively smooth.
-uniform float cloud_facet_levels : hint_range(1.0, 32.0) = 5.0;
+// Raised from the original 5: at 5 steps the shadow-to-lit transition was coarse enough to read
+// as banded/poster rather than shaded, which is a fair complaint on its own even where the
+// faceted silhouette (cloud_facet_mix) is subtle. 9 keeps the same stylised, stepped character
+// -- still visibly quantised, not a smooth gradient -- just with finer steps.
+uniform float cloud_facet_levels : hint_range(1.0, 32.0) = 9.0;
 // Fraction of slab height, from the floor, over which density ramps up from zero. Avoids a
 // flat horizontal cutoff at the bottom of the slab.
 uniform float cloud_profile_bottom_fade : hint_range(0.0, 0.5) = 0.22;
@@ -89,6 +93,19 @@ uniform vec3 cloud_albedo : source_color = vec3(1.0, 0.99, 0.97);
 // Only the *colour* of sun_transmittance() is borrowed from the atmosphere; the scale is set
 // here.
 uniform float cloud_sun_intensity : hint_range(0.0, 12.0) = 2.4;
+// Altitude, in rayleigh_scale_heights, at which the cloud's SUNLIGHT COLOUR is sampled. The
+// cloud's own altitude is used when it is lower than this, so on an Earth-like planet (clouds at
+// ~2 km under an 8 km scale height) this changes nothing at all.
+//
+// It exists because a small planet can put its cloud deck high in a thin atmosphere -- here 1500 m
+// of cloud over an 800 m scale height, nearly two scale heights up, above ~85% of the air. Measured
+// at the moment of sunset, the light arriving at 1500 m is still near-white (warmth +0.21) while
+// the ground sees deep orange (+0.82); the deck only reaches ground-like colour once the sun is
+// ~10 degrees BELOW the horizon. That is physically what a stratospheric cloud would do, and it is
+// also the "clouds change way after the sun goes down" complaint. Sampling one scale height up
+// (+0.49 at sunset) puts the colour back in step with the sky without killing the after-sunset
+// glow, which is what would happen if this were clamped all the way to the surface.
+uniform float cloud_light_altitude : hint_range(0.0, 8.0) = 1.0;
 // Ambient fill so shadowed cloud is not black. Tinted by the sun colour, so it reddens too.
 uniform float cloud_ambient : hint_range(0.0, 1.0) = 0.12;
 uniform float cloud_light_gain : hint_range(0.0, 4.0) = 1.0;
@@ -174,6 +191,13 @@ uniform sampler3D cloud_noise : repeat_enable, filter_linear, hint_default_black
 // the same period and the tiling becomes obvious.
 uniform float cloud_detail_scale : hint_range(1.1, 8.0) = 2.37;
 uniform float cloud_detail_weight : hint_range(0.0, 1.0) = 0.25;
+// Third, finer octave, folded on top of the first two. Breaks up the single-frequency "blobby"
+// look a two-octave field reads as -- real cloud silhouettes have structure at several scales
+// at once (the cauliflower look), not just one bump size softened by a bit of a second. Scale is
+// non-integer for the same tiling reason as cloud_detail_scale, and offset from it so the two
+// detail octaves do not repeat in lockstep either.
+uniform float cloud_micro_scale : hint_range(1.1, 12.0) = 5.19;
+uniform float cloud_micro_weight : hint_range(0.0, 1.0) = 0.18;
 
 // ---------------------------------------------------------------------------------------
 // Style: polygon facets and sky-tinted shading
@@ -229,7 +253,18 @@ vec4 corner_values(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 offset) {
 
 float smooth_value(vec3 sp, vec3 offset) {
 	vec3 np = sp + offset;
-	return mix(textureLod(cloud_noise, np, 0.0).r, textureLod(cloud_noise, np * cloud_detail_scale, 0.0).r, cloud_detail_weight);
+	float base = textureLod(cloud_noise, np, 0.0).r;
+	// Weight is a uniform, not a constant, so without the guard the GPU pays for the texture
+	// fetch every pixel even when the mix() throws the result away entirely -- exactly the
+	// state cloud_micro_weight = 0.0 is in right now in the demo scene. The branch is
+	// uniform-driven (same outcome for every pixel in the draw), so it costs nothing to keep.
+	if (cloud_detail_weight > 0.0001) {
+		base = mix(base, textureLod(cloud_noise, np * cloud_detail_scale, 0.0).r, cloud_detail_weight);
+	}
+	if (cloud_micro_weight > 0.0001) {
+		base = mix(base, textureLod(cloud_noise, np * cloud_micro_scale, 0.0).r, cloud_micro_weight);
+	}
+	return base;
 }
 
 // The cloud field, triangulated. `sp` picks the lattice tetrahedron; the offsets shift only where
@@ -319,7 +354,9 @@ vec4 cloud_field(vec3 sp, vec3 offset0, vec3 offset1, float blend, float coverag
 // coverage : local coverage after the weather map
 // flow     : world-space wind at this location
 // Returns (edge-ramped density, field gradient in sampling space).
-vec4 cloud_density(vec3 dir, float height01, float layer, float top_fade, float coverage, vec3 flow, float pixel_sp, out float thickness) {
+// axis, drift_cs (cos, sin of the drift angle) and wind (the baked flow, already drifted and scaled) are the same for
+// every layer of a pixel, so the caller computes them once: two sin/cos pairs per layer were a real share of the cost.
+vec4 cloud_density(vec3 dir, float height01, float layer, float top_fade, float coverage, vec3 axis, vec2 drift_cs, vec3 wind, float pixel_sp, out float thickness) {
 	vec3 layer_offset = vec3(layer * cloud_layer_offset);
 
 	// Regional cloud type: a single low-frequency lookup shared by puffiness and wispiness, so
@@ -338,9 +375,7 @@ vec4 cloud_density(vec3 dir, float height01, float layer, float top_fade, float 
 	// is zero. The crossfade IS clouds forming and dissolving, so it spans the whole cycle at a steady
 	// rate -- with flow_speed the default 0.002 a cloud takes about four minutes to fade in or out.
 	// Layers get a small phase offset so the stack does not pulse in unison.
-	vec3 axis = normalize(cloud_wind_axis);
-	float drift = TIME * cloud_drift_speed;
-	vec3 dir_r = rotate_about(dir, axis, drift);
+	vec3 dir_r = dir * drift_cs.x + cross(axis, dir) * drift_cs.y + axis * dot(axis, dir) * (1.0 - drift_cs.x);
 	if (wisp > 0.0) {
 		// Compress along the wind axis and stretch across it: noise features become long streaks
 		// pointing along the wind, the way cirrus is combed out by high-altitude shear.
@@ -355,8 +390,6 @@ vec4 cloud_density(vec3 dir, float height01, float layer, float top_fade, float 
 		float ph0 = fract(t);
 		float ph1 = fract(t + 0.5);
 		float blend = smoothstep(0.0, 1.0, abs(ph0 - 0.5) * 2.0);
-		// The wind is baked in planet space; turn it with the drift so it stays aligned with the field.
-		vec3 wind = rotate_about(flow, axis, drift) * (flow_strength * cloud_scale);
 		field = cloud_field(sp, layer_offset - wind * ph0, layer_offset - wind * ph1, blend, coverage);
 	} else {
 		field = cloud_field(sp, layer_offset, layer_offset, 0.0, coverage);
@@ -404,6 +437,31 @@ void fragment() {
 	float r_out = planet_radius + max(cloud_top, cloud_bottom + 1.0);
 	float cam_r = length(cam);
 
+	// From outside the shell mesh both of its hemispheres rasterise, and the far one would run this
+	// same march again for a pixel the near one already covers -- 2x the cost of every orbital view.
+	// Keep only the fragment at the NEARER intersection of the view ray with the mesh's own sphere.
+	// Decided geometrically, not by FRONT_FACING, so it can't depend on mesh winding (see below).
+	//
+	// The early-outs below clear `alive` instead of discarding: the layer samples are shared across each
+	// 2x2 pixel quad through fine derivatives (see the gather further down), which needs all four lanes
+	// still running when it gets there. A quad with no live lane at all is still dropped before any work.
+	bool alive = true;
+	float mesh_r = length(v_world_pos - planet_center);
+	if (cam_r > mesh_r) {
+		vec2 mesh_hit = ray_sphere(cam, rd, mesh_r);
+		if (distance(v_world_pos, CAMERA_POSITION_WORLD) > 0.5 * (mesh_hit.x + mesh_hit.y)) {
+			alive = false;
+		}
+	}
+
+	// A FRONT_FACING-based discard was tried here to cut the 2x overdraw cull_disabled causes
+	// when viewed from outside the shell (both the near and far hemisphere of the sphere get
+	// rasterised and independently compute the same full slab march). Reverted: it was verified
+	// against GPU-time numbers only, never against a screenshot, and a later session found clouds
+	// missing near the horizon from orbit -- exactly what discarding the WRONG side (near instead
+	// of far) would cause if this mesh's winding doesn't match the assumption FRONT_FACING was
+	// written against. Re-add only with an immediate visual check, not just a timing check.
+
 	vec2 hit_out = ray_sphere(cam, rd, r_out);
 	vec2 hit_in = ray_sphere(cam, rd, r_in);
 	bool inner_ahead = (hit_in.y > hit_in.x) && (hit_in.x > 0.0);
@@ -418,8 +476,8 @@ void fragment() {
 	float top_fade = (cam_r > r_out) ? 1.0 : cloud_profile_top_fade;
 
 	// Clip the view ray to the slab. Three cases, by where the camera sits relative to it.
-	float t_enter;
-	float t_exit;
+	float t_enter = 0.0;
+	float t_exit = 0.0;
 	if (cam_r < r_in) {
 		// Below the clouds: enter where the ray leaves the inner sphere.
 		t_enter = max(hit_in.y, 0.0);
@@ -427,7 +485,7 @@ void fragment() {
 	} else if (cam_r > r_out) {
 		// Above the clouds, looking down (or past them).
 		if (hit_out.y <= hit_out.x || hit_out.y <= 0.0) {
-			discard; // ray never reaches the slab
+			alive = false; // ray never reaches the slab
 		}
 		t_enter = max(hit_out.x, 0.0);
 		t_exit = inner_ahead ? min(hit_in.x, hit_out.y) : hit_out.y;
@@ -437,17 +495,28 @@ void fragment() {
 		t_exit = inner_ahead ? min(hit_in.x, hit_out.y) : hit_out.y;
 	}
 
-	if (t_exit <= t_enter) {
-		discard;
-	}
-
 	// Stop at the planet surface, so clouds never draw over ground seen beyond the limb.
 	vec2 ground = ray_sphere(cam, rd, planet_radius);
 	if (ground.y > ground.x && ground.x > 0.0) {
 		t_exit = min(t_exit, ground.x);
-		if (t_exit <= t_enter) {
-			discard;
-		}
+	}
+	if (!alive || !(t_exit > t_enter)) {
+		alive = false;
+		t_enter = 0.0;
+		t_exit = 1.0; // keeps the (unused) per-pixel terms below finite
+	}
+
+	// 2x2 quad this pixel sits in: which corner it is, and whether any of the four needs clouds at all.
+	// Fine derivatives are the exact difference across the pair, so a neighbour's value is v +- dFdxFine(v).
+	bool odd_x = (int(FRAGCOORD.x) & 1) == 1;
+	bool odd_y = (int(FRAGCOORD.y) & 1) == 1;
+	int lane = (odd_x ? 1 : 0) + (odd_y ? 2 : 0);
+	float alive_f = alive ? 1.0 : 0.0;
+	float alive_x = odd_x ? alive_f - dFdxFine(alive_f) : alive_f + dFdxFine(alive_f);
+	float alive_y = odd_y ? alive_f - dFdyFine(alive_f) : alive_f + dFdyFine(alive_f);
+	float alive_xy = odd_y ? alive_x - dFdyFine(alive_x) : alive_x + dFdyFine(alive_x);
+	if (alive_f + alive_x + alive_y + alive_xy < 0.5) {
+		discard; // the whole quad: every lane agrees, so nothing below is left without its neighbours
 	}
 
 	float seg = t_exit - t_enter;
@@ -463,7 +532,12 @@ void fragment() {
 	// a grazing view at the terminator, where the segment can span tens of kilometres and the
 	// far end really is in shadow -- acceptable for the saving.
 	vec3 mid_p = cam + rd * ((t_enter + t_exit) * 0.5);
-	vec3 sun_col = sun_transmittance(mid_p) * cloud_sun_intensity * sun_tint;
+	// Sampled at cloud_light_altitude rather than at mid_p itself -- see that uniform. min(), so a
+	// deck already inside the dense air is untouched.
+	float mid_alt = length(mid_p) - planet_radius;
+	float light_alt = min(mid_alt, cloud_light_altitude * rayleigh_scale_height);
+	vec3 sun_ref_p = normalize(mid_p) * (planet_radius + light_alt);
+	vec3 sun_col = sun_transmittance(sun_ref_p) * cloud_sun_intensity * sun_tint;
 
 	// Regional weather along this view ray, sampled once at the slab midpoint: weather varies over
 	// thousands of kilometres, so one lookup per pixel is plenty. Explicit LOD, because derivatives
@@ -496,7 +570,14 @@ void fragment() {
 	// symmetric, wider falloff here used to do exactly that: a single mid_p sample per pixel has no
 	// idea it is being viewed from a wide orbital FOV instead of from the ground it was tuned for.
 	float sun_alt = dot(mid_up, sun_direction);
-	float grazing = smoothstep(-0.06, 0.16, sun_alt) * (1.0 - smoothstep(0.16, 0.55, sun_alt));
+	// Centred ON the horizon, not 9 degrees above it. The old window peaked at sun_alt 0.16 (+9.2
+	// deg) and was already down to 0.18 at sunset and 0.00 by -3.4 deg -- but the sunlight reaching
+	// the deck does not actually go red until the sun is at or below the horizon, so the saturation
+	// boost and the underlight were at full strength while the light was still white, and switched
+	// off exactly as it turned orange. The two never overlapped. Still one-sided (it reaches
+	// further into the day than into the night), which is what keeps it reading as a ring localised
+	// at the terminator when seen from orbit.
+	float grazing = smoothstep(-0.14, 0.0, sun_alt) * (1.0 - smoothstep(0.0, 0.30, sun_alt));
 	float underlight = grazing * cloud_sunset_underlight;
 	// Low sun: saturate the sunlight's hue (ratios squared, brightest channel kept) so lit undersides
 	// read orange and pink instead of being bleached to cream by the tonemapper's highlight rolloff.
@@ -520,7 +601,53 @@ void fragment() {
 			* 0.4 * moon_phase_brightness * planet_shadow_dir(mid_p, moon_direction);
 	float opacity_per_m = cloud_density_scale * max(cloud_opacity, 0.001) * step_len;
 
+	// Drift rotation and wind, shared by every layer (see cloud_density)
+	vec3 wind_axis = normalize(cloud_wind_axis);
+	float drift = TIME * cloud_drift_speed;
+	vec2 drift_cs = vec2(cos(drift), sin(drift));
+	// The wind is baked in planet space; turn it with the drift so it stays aligned with the field.
+	vec3 wind = weather_enabled ? rotate_about(flow, wind_axis, drift) * (flow_strength * cloud_scale) : vec3(0.0);
+
 	int layer_count = clamp(cloud_layers, 1, CLOUD_LAYERS_MAX);
+
+	// Half-resolution sampling, shared across the 2x2 quad: each lane evaluates the cloud field for ONE
+	// layer (layer = its corner of the quad), along its own ray, and the four lanes hand those samples to
+	// each other through fine derivatives. The field is what costs; with 3 layers every pixel now pays for
+	// one evaluation instead of three. Compositing, lighting and the slab clipping stay per pixel, so
+	// silhouettes against the sky and the planet keep full resolution; only the density inside a layer
+	// comes from a neighbour's ray one pixel over. A layer whose owner is dead (past the limb, the far
+	// hemisphere) is recomputed by whoever needs it, which only happens along those edges.
+	vec4 own_cd = vec4(0.0);
+	vec2 own_tv = vec2(0.0); // (thickness, valid)
+	if (alive && lane < layer_count) {
+		float t = t_enter + step_len * (float(lane) + jitter);
+		vec3 p = cam + rd * t;
+		float pr = length(p);
+		float height01 = clamp((pr - r_in) / max(r_out - r_in, 1.0), 0.0, 1.0);
+		float pixel_sp = t * pixel_angle * cloud_scale / max(pr, 1.0);
+		own_cd = cloud_density(p / max(pr, 1e-3), height01, float(lane), top_fade, coverage, wind_axis, drift_cs, wind, pixel_sp, own_tv.x);
+		own_tv.y = 1.0;
+	}
+	vec4 cd_x = odd_x ? own_cd - dFdxFine(own_cd) : own_cd + dFdxFine(own_cd);
+	vec4 cd_y = odd_y ? own_cd - dFdyFine(own_cd) : own_cd + dFdyFine(own_cd);
+	vec4 cd_xy = odd_y ? cd_x - dFdyFine(cd_x) : cd_x + dFdyFine(cd_x);
+	vec2 tv_x = odd_x ? own_tv - dFdxFine(own_tv) : own_tv + dFdxFine(own_tv);
+	vec2 tv_y = odd_y ? own_tv - dFdyFine(own_tv) : own_tv + dFdyFine(own_tv);
+	vec2 tv_xy = odd_y ? tv_x - dFdyFine(tv_x) : tv_x + dFdyFine(tv_x);
+	vec4 shared_cd[4];
+	vec2 shared_tv[4];
+	shared_cd[lane] = own_cd;
+	shared_tv[lane] = own_tv;
+	shared_cd[lane ^ 1] = cd_x;
+	shared_tv[lane ^ 1] = tv_x;
+	shared_cd[lane ^ 2] = cd_y;
+	shared_tv[lane ^ 2] = tv_y;
+	shared_cd[lane ^ 3] = cd_xy;
+	shared_tv[lane ^ 3] = tv_xy;
+	if (!alive) {
+		discard;
+	}
+
 	for (int i = 0; i < CLOUD_LAYERS_MAX; i++) {
 		// Stop once what is behind can no longer show through.
 		if (i >= layer_count || trans < 0.02) {
@@ -529,13 +656,19 @@ void fragment() {
 		float t = t_enter + step_len * (float(i) + jitter);
 		vec3 p = cam + rd * t;
 		float pr = length(p);
-		float height01 = clamp((pr - r_in) / max(r_out - r_in, 1.0), 0.0, 1.0);
 
 		vec3 up = p / max(pr, 1e-3);
 		float thick;
-		// One pixel's footprint at this sample, in cloud sampling-space units (dir * cloud_scale).
-		float pixel_sp = t * pixel_angle * cloud_scale / max(pr, 1.0);
-		vec4 cd = cloud_density(up, height01, float(i), top_fade, coverage, flow, pixel_sp, thick);
+		vec4 cd;
+		if (i < 4 && shared_tv[min(i, 3)].y > 0.5) {
+			cd = shared_cd[min(i, 3)];
+			thick = shared_tv[min(i, 3)].x;
+		} else {
+			float height01 = clamp((pr - r_in) / max(r_out - r_in, 1.0), 0.0, 1.0);
+			// One pixel's footprint at this sample, in cloud sampling-space units (dir * cloud_scale).
+			float pixel_sp = t * pixel_angle * cloud_scale / max(pr, 1.0);
+			cd = cloud_density(up, height01, float(i), top_fade, coverage, wind_axis, drift_cs, wind, pixel_sp, thick);
+		}
 		float dens = cd.x;
 		if (dens <= 0.0) {
 			continue;

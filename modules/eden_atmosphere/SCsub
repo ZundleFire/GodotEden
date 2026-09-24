@@ -23,6 +23,8 @@ module_sources = [
     "eden_planet_atmosphere.cpp",
     "eden_cloud_shell.cpp",
     "eden_planet_rings.cpp",
+    "eden_parent_planet.cpp",
+    "eden_space_environment.cpp",
     "eden_atmosphere_post_effect.cpp",
 ]
 

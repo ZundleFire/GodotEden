@@ -1,4 +1,5 @@
 #include "eden_cloud_shell.h"
+#include "eden_material_util.h"
 
 #include "eden_atmosphere_shaders.gen.h"
 
@@ -192,7 +193,7 @@ void EdenCloudShell::rebuild_noise() {
 	noise_texture.instantiate();
 	noise_texture->create(Image::FORMAT_L8, res, res, res, false, slices);
 
-	material->set_shader_parameter(SNAME("cloud_noise"), noise_texture);
+	eden_set_param(material, SNAME("cloud_noise"), noise_texture);
 	noise_signature = signature;
 }
 
@@ -363,7 +364,7 @@ void EdenCloudShell::rebuild_weather() {
 		return;
 	}
 	weather_signature = signature;
-	material->set_shader_parameter(SNAME("weather_enabled"), weather_enabled);
+	eden_set_param(material, SNAME("weather_enabled"), weather_enabled);
 	if (!weather_enabled) {
 		return;
 	}
@@ -389,7 +390,7 @@ void EdenCloudShell::rebuild_weather() {
 	}
 	weather_cubemap.instantiate();
 	weather_cubemap->create_from_images(faces);
-	material->set_shader_parameter(SNAME("weather_map"), weather_cubemap);
+	eden_set_param(material, SNAME("weather_map"), weather_cubemap);
 }
 
 // ===========================================================================================
@@ -399,10 +400,10 @@ void EdenCloudShell::_push_uniforms() {
 	if (material.is_null()) {
 		return;
 	}
-#define EDEN_CLOUD_U_FLOAT(m_name, m_default, m_hint, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
-#define EDEN_CLOUD_U_INT(m_name, m_default, m_hint, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
-#define EDEN_CLOUD_U_VEC3(m_name, m_x, m_y, m_z, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
-#define EDEN_CLOUD_U_COLOR(m_name, m_r, m_g, m_b, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
+#define EDEN_CLOUD_U_FLOAT(m_name, m_default, m_hint, m_group) eden_set_param(material, SNAME(#m_name), m_name);
+#define EDEN_CLOUD_U_INT(m_name, m_default, m_hint, m_group) eden_set_param(material, SNAME(#m_name), m_name);
+#define EDEN_CLOUD_U_VEC3(m_name, m_x, m_y, m_z, m_group) eden_set_param(material, SNAME(#m_name), m_name);
+#define EDEN_CLOUD_U_COLOR(m_name, m_r, m_g, m_b, m_group) eden_set_param(material, SNAME(#m_name), m_name);
 #define EDEN_CLOUD_L_FLOAT(m_name, m_default, m_hint, m_group)
 #define EDEN_CLOUD_L_INT(m_name, m_default, m_hint, m_group)
 #define EDEN_CLOUD_L_VEC3(m_name, m_x, m_y, m_z, m_group)
@@ -419,8 +420,8 @@ void EdenCloudShell::_push_uniforms() {
 
 	// Pushed as a fallback for standalone use. When an EdenPlanetAtmosphere has this material
 	// linked, it overwrites these each frame and is authoritative -- see the props table.
-	material->set_shader_parameter(SNAME("planet_radius"), planet_radius);
-	material->set_shader_parameter(SNAME("planet_center"), planet_center);
+	eden_set_param(material, SNAME("planet_radius"), planet_radius);
+	eden_set_param(material, SNAME("planet_center"), planet_center);
 }
 
 // ===========================================================================================

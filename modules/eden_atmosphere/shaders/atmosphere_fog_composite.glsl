@@ -51,10 +51,14 @@ float fog_optical_depth(vec3 ro, vec3 rd, float scene_dist) {
 		return 0.0;
 	}
 
-	// Composite Simpson over 8 intervals, sampling the true spherical altitude. Several samples
+	// Composite Simpson over 4 intervals, sampling the true spherical altitude. Several samples
 	// are needed rather than an endpoint formula because a horizontal ray over a sphere is a
-	// chord: its middle dips below both ends by L^2 / 8R, which on a 40km planet is ~80m over 5km.
-	const int N = 8;
+	// chord: its middle dips below both ends by L^2 / 8R, which on a 40km planet is ~80m over 5km
+	// -- 4 intervals (5 fog_density_at() calls, each an exp()) already resolves that curvature to
+	// well under Simpson's own error term for a monotonic exponential falloff; this pass runs at
+	// full screen resolution every frame, so halving the sample count from 8 intervals (9 calls)
+	// is a real, low-risk saving.
+	const int N = 4;
 	float h = (t1 - t0) / float(N);
 	float sum = fog_density_at(ro + rd * t0) + fog_density_at(ro + rd * t1);
 	for (int i = 1; i < N; i++) {

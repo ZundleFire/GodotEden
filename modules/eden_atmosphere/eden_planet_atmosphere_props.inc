@@ -27,6 +27,17 @@ EDEN_ATMO_U_FLOAT(mie_scale_height, 120.0, "10.0,2000.0,1.0,suffix:m", "Scatteri
 EDEN_ATMO_U_FLOAT(rayleigh_strength, 2.5, "0.0,8.0,0.01", "Scattering")
 EDEN_ATMO_U_FLOAT(mie_strength, 0.35, "0.0,8.0,0.01", "Scattering")
 EDEN_ATMO_U_FLOAT(mie_anisotropy, 0.76, "0.0,0.999,0.001", "Scattering")
+// Ozone absorption (Chappuis band). Absorbs, never scatters, and is strongest in GREEN -- which is
+// what stops a low sun turning the zenith olive: reddened slant light scattered blue-first lands on
+// green, and this is the only term that removes it.
+//
+// Relative to Rayleigh (beta_ozone scales with rayleigh_strength), so 1.0 is Earth's
+// ozone-to-Rayleigh ratio at any rayleigh_strength. Measured over the capture poses, green cast at
+// the sunset zenith goes +12.5 (off) -> 0.0 (at 1.0) -> -5.5 (at 1.5, i.e. slightly violet).
+// Default 1.5 rather than a literal 1.0: this is a single-scattering model, and the multiple
+// scattering it does not simulate is what puts blue back into a real zenith, so a little extra
+// absorption stands in for it. Past ~2.5 twilight turns openly magenta.
+EDEN_ATMO_U_FLOAT(ozone_strength, 1.5, "0.0,4.0,0.01", "Scattering")
 // RGB wavelengths in nm. Rayleigh goes as 1/lambda^4, so this is the physical control for an
 // alien sky -- shift it and gradient, sunset and sun colour all move together consistently.
 EDEN_ATMO_U_VEC3(rayleigh_wavelengths, 680.0, 550.0, 440.0, "Scattering")
@@ -110,64 +121,11 @@ EDEN_ATMO_L_FLOAT(sun2_night_light_floor, 0.0, "0.0,1.0,0.001", "Sun 2 Light")
 EDEN_ATMO_L_BOOL(drive_sun2_light, true, "Sun 2 Light")
 EDEN_ATMO_L_BOOL(drive_sun2_rotation, true, "Sun 2 Light")
 
-// =========================================================================================
-// Parent planet: a large body fixed in the sky, for a "standing on a moon" view of the planet you
-// orbit. Shaded like the moon (a real lit-sphere phase), with a pixel-art procedural Earth-like
-// surface (ocean/land/ice, drifting clouds, posterised lighting) when no texture is supplied --
-// ported from the "Animated Pixel Art Planet" shader (godotshaders.com/shader/animated-pixel-art-
-// planet). See planet_sky.gdshader's pp_* functions for the port notes.
-// =========================================================================================
-EDEN_ATMO_L_BOOL(parent_planet_enabled, false, "Parent Planet")
-EDEN_ATMO_U_VEC3(parent_planet_direction, 0.0, 0.5, 0.866, "Parent Planet")
-EDEN_ATMO_U_FLOAT(parent_planet_angular_radius, 0.3, "0.5,90.0,0.01,radians_as_degrees", "Parent Planet")
-EDEN_ATMO_U_VEC3(parent_planet_up, 0.0, 1.0, 0.0, "Parent Planet")
-EDEN_ATMO_U_FLOAT(parent_planet_brightness, 1.6, "0.05,20.0,0.01", "Parent Planet")
-EDEN_ATMO_U_FLOAT(parent_planet_limb_darkening, 0.25, "0.0,1.0,0.01", "Parent Planet")
-EDEN_ATMO_U_FLOAT(parent_planet_earthshine, 0.02, "0.0,0.5,0.001", "Parent Planet")
-// A photo or an equirect surface map; leave empty for the procedural surface below.
-EDEN_ATMO_L_FLOAT(parent_planet_texture_rotation_deg, 0.0, "-180.0,180.0,0.1,suffix:°", "Parent Planet")
-
-// --- Pixel-art procedural surface (ignored once parent_planet_texture is assigned) ---------
-// Snaps the whole disc to this many "pixels" across before anything else is evaluated, for the
-// chunky retro look; 0 disables the snap for a smooth surface.
-EDEN_ATMO_U_FLOAT(parent_planet_pixel_scale, 110.0, "0.0,400.0,1.0", "Parent Planet Surface")
-EDEN_ATMO_U_INT(parent_planet_noise_cells, 8, "2,64,1", "Parent Planet Surface")
-EDEN_ATMO_U_FLOAT(parent_planet_noise_strength, 1.4, "0.0,4.0,0.01", "Parent Planet Surface")
-EDEN_ATMO_U_INT(parent_planet_detail_cells, 18, "2,128,1", "Parent Planet Surface")
-EDEN_ATMO_U_FLOAT(parent_planet_detail_strength, 0.35, "0.0,2.0,0.01", "Parent Planet Surface")
-EDEN_ATMO_U_FLOAT(parent_planet_land_fraction, 0.42, "0.0,1.0,0.01", "Parent Planet Surface")
-EDEN_ATMO_U_FLOAT(parent_planet_mountain_fraction, 0.28, "0.0,1.0,0.01", "Parent Planet Surface")
-EDEN_ATMO_U_FLOAT(parent_planet_ice_fraction, 0.06, "0.0,1.0,0.01", "Parent Planet Surface")
-EDEN_ATMO_U_COLOR(parent_planet_ocean_deep, 0.05, 0.12, 0.28, "Parent Planet Surface")
-EDEN_ATMO_U_COLOR(parent_planet_ocean_shallow, 0.09, 0.22, 0.38, "Parent Planet Surface")
-EDEN_ATMO_U_COLOR(parent_planet_land_low, 0.22, 0.42, 0.20, "Parent Planet Surface")
-EDEN_ATMO_U_COLOR(parent_planet_land_high, 0.62, 0.55, 0.38, "Parent Planet Surface")
-EDEN_ATMO_U_COLOR(parent_planet_ice_color, 0.92, 0.94, 0.97, "Parent Planet Surface")
-// The planet's own spin, independent of where it sits in the sky.
-EDEN_ATMO_U_FLOAT(parent_planet_rotation, 0.0, "-360.0,360.0,0.05,radians_as_degrees", "Parent Planet Surface")
-// Radians/second the surface (and, faster/slower, the clouds) spin -- a slowly "alive" planet.
-EDEN_ATMO_L_FLOAT(parent_planet_band_speed, 0.01, "-1.0,1.0,0.0001", "Parent Planet Surface")
-// Posterised lighting steps, the pixel-art shading look. 1 = smooth.
-EDEN_ATMO_U_INT(parent_planet_shade_bands, 5, "1,16,1", "Parent Planet Surface")
-// Mixed into the noise hash: a different seed gives a different (but repeatable) planet.
-EDEN_ATMO_U_FLOAT(parent_planet_seed, 0.0, "-1000.0,1000.0,1.0", "Parent Planet Surface")
-
-// --- Clouds --------------------------------------------------------------------------------
-EDEN_ATMO_U_FLOAT(parent_planet_cloud_cover, 0.4, "0.0,1.0,0.01", "Parent Planet Clouds")
-EDEN_ATMO_U_INT(parent_planet_cloud_cells, 9, "2,64,1", "Parent Planet Clouds")
-EDEN_ATMO_U_INT(parent_planet_cloud_detail_cells, 20, "2,128,1", "Parent Planet Clouds")
-EDEN_ATMO_U_FLOAT(parent_planet_cloud_detail_strength, 0.4, "0.0,2.0,0.01", "Parent Planet Clouds")
-// Rotation speed relative to the surface -- clouds drift across the terrain, not with it.
-EDEN_ATMO_U_FLOAT(parent_planet_cloud_rotation, 0.6, "-4.0,4.0,0.01", "Parent Planet Clouds")
-EDEN_ATMO_U_COLOR(parent_planet_cloud_color, 0.98, 0.98, 1.0, "Parent Planet Clouds")
-EDEN_ATMO_U_FLOAT(parent_planet_cloud_shadow, 0.3, "0.0,1.0,0.01", "Parent Planet Clouds")
-
-// --- Atmosphere rim + outer glow -------------------------------------------------------------
-EDEN_ATMO_U_COLOR(parent_planet_atmosphere_color, 0.55, 0.75, 1.0, "Parent Planet Atmosphere")
-EDEN_ATMO_U_FLOAT(parent_planet_atmosphere_power, 4.0, "0.5,16.0,0.01", "Parent Planet Atmosphere")
-EDEN_ATMO_U_FLOAT(parent_planet_atmosphere_intensity, 1.0, "0.0,4.0,0.01", "Parent Planet Atmosphere")
-EDEN_ATMO_U_FLOAT(parent_planet_glow_intensity, 0.15, "0.0,8.0,0.01", "Parent Planet Atmosphere")
-EDEN_ATMO_U_FLOAT(parent_planet_glow_size, 0.05, "0.05,45.0,0.01,radians_as_degrees", "Parent Planet Atmosphere")
+// Parent planet (the sky disc seen from a moon) and Stars/Space (deep-space panorama) moved out
+// to EdenParentPlanet and EdenSpaceEnvironment respectively -- both push their own uniforms into
+// this node's sky material by finding it as a sibling, the same auto-link pattern EdenCloudShell/
+// EdenPlanetRings use, just in the opposite direction. See those classes' props.inc for the full
+// property lists.
 
 // =========================================================================================
 // Sky appearance
@@ -180,64 +138,6 @@ EDEN_ATMO_U_COLOR(ground_albedo, 0.11, 0.10, 0.09, "Sky")
 EDEN_ATMO_U_FLOAT(ground_light_scale, 0.15, "0.0,2.0,0.01", "Sky")
 EDEN_ATMO_U_COLOR(space_color, 0.0, 0.0, 0.0, "Sky")
 EDEN_ATMO_U_FLOAT(exposure, 1.0, "0.0,8.0,0.01", "Sky")
-
-// =========================================================================================
-// Stars
-// =========================================================================================
-EDEN_ATMO_U_FLOAT(star_intensity, 1.0, "0.0,4.0,0.01", "Stars")
-EDEN_ATMO_U_FLOAT(star_density, 0.02, "0.0,0.2,0.001", "Stars")
-EDEN_ATMO_U_FLOAT(star_scale, 400.0, "50.0,2000.0,1.0", "Stars")
-// Radius of each star as a fraction of its lattice cell.
-EDEN_ATMO_U_FLOAT(star_size, 0.4, "0.02,0.5,0.001", "Stars")
-EDEN_ATMO_U_FLOAT(star_brightness_variation, 0.75, "0.0,1.0,0.01", "Stars")
-// 0 all white, 1 full blue-white to orange spread.
-EDEN_ATMO_U_FLOAT(star_color_variation, 0.3, "0.0,1.0,0.01", "Stars")
-EDEN_ATMO_U_FLOAT(star_twinkle, 0.0, "0.0,1.0,0.01", "Stars")
-EDEN_ATMO_U_FLOAT(star_twinkle_speed, 3.0, "0.0,20.0,0.01", "Stars")
-// Fakes the eye adaptation the pipeline does not have; without it the daytime sky is speckled.
-EDEN_ATMO_U_FLOAT(star_daylight_fade, 80.0, "0.0,400.0,1.0", "Stars")
-// Procedural star strength used INSTEAD of star_intensity while a space panorama is set. 0 lets
-// the art stand alone; nonzero adds procedural sparkle on top so faint/low-res panoramas still
-// read as a proper starfield instead of just a dim nebula wash.
-EDEN_ATMO_L_FLOAT(star_intensity_with_panorama, 0.5, "0.0,4.0,0.01", "Stars")
-
-// =========================================================================================
-// Deep space panorama
-// =========================================================================================
-// The Texture2D slots themselves are bound by hand (they are not scalars); these are the
-// shaping controls that go with them.
-EDEN_ATMO_U_COLOR(space_tint, 1.0, 1.0, 1.0, "Space")
-// Default is 8, not 1. Photographed/rendered HDR space panoramas are authored at physical-ish
-// levels -- the supplied set averages ~0.023 luminance -- so at 1.0 they are too faint to survive
-// tonemapping and read as "the panorama is not loading". Measured, not guessed.
-EDEN_ATMO_U_FLOAT(space_intensity, 1.6, "0.0,64.0,0.01", "Space")
-EDEN_ATMO_U_FLOAT(space_overlay_intensity, 1.6, "0.0,64.0,0.01", "Space")
-// Grading, applied to both slots after intensity. Black point crushes the faint noise floor of a
-// downscaled HDR; gamma (pivot 1.0) above 1 sinks the dim wash while bright stars stay; contrast
-// pivots at mid-grey 0.18; saturation 0 is greyscale.
-EDEN_ATMO_U_FLOAT(space_black_point, 0.05, "0.0,1.0,0.001", "Space")
-EDEN_ATMO_U_FLOAT(space_gamma, 1.6, "0.2,4.0,0.01", "Space")
-EDEN_ATMO_U_FLOAT(space_contrast, 1.0, "0.2,4.0,0.01", "Space")
-EDEN_ATMO_U_FLOAT(space_saturation, 1.0, "0.0,3.0,0.01", "Space")
-EDEN_ATMO_U_FLOAT(space_opacity, 1.0, "0.0,1.0,0.01", "Space")
-// Same trick as star_daylight_fade: with no eye adaptation in the pipeline, a nebula/starfield
-// panorama would otherwise stay just as visible at noon as at midnight. 0 disables fading
-// (panorama always fully visible); the two slots fade independently so, e.g., a faint nebula
-// overlay can vanish well before the base starfield does.
-EDEN_ATMO_U_FLOAT(space_daylight_fade, 60.0, "0.0,400.0,1.0", "Space")
-EDEN_ATMO_U_FLOAT(space_overlay_daylight_fade, 60.0, "0.0,400.0,1.0", "Space")
-// Axis the star sphere turns about. Separate from planet_spin_axis so the galactic plane can be
-// tilted relative to the planet's rotation, which is the normal case in reality.
-EDEN_ATMO_U_VEC3(space_rotation_axis, 0.0, 1.0, 0.0, "Space")
-// How strongly the starfield tracks the day. 1 is physically correct -- the celestial sphere is
-// fixed while the planet turns, so stars wheel overhead at the same rate the sun moves. 0 pins
-// them, which looks wrong at night but is occasionally wanted for a static backdrop.
-EDEN_ATMO_L_FLOAT(space_day_coupling, 1.0, "0.0,1.0,0.01", "Space")
-// Fixed offset, for orienting a galaxy band where you want it.
-EDEN_ATMO_L_FLOAT(space_rotation_offset_deg, 0.0, "-360.0,360.0,0.1,suffix:°", "Space")
-// Extra offset on top of the above, for the overlay slot alone -- lets a nebula overlay sit at
-// its own angle relative to the base starfield instead of being locked to the same orientation.
-EDEN_ATMO_L_FLOAT(space_overlay_rotation_offset_deg, 0.0, "-360.0,360.0,0.1,suffix:°", "Space")
 
 // =========================================================================================
 // Time of day (CPU-side: these drive sun_direction, they are not uniforms themselves)
@@ -350,6 +250,10 @@ EDEN_ATMO_L_FLOAT(fog_base_altitude, 0.0, "-5000.0,20000.0,1.0,suffix:m", "Fog")
 // double it, and zero leaves a visible seam where fogged terrain meets the horizon.
 EDEN_ATMO_L_FLOAT(fog_sky_affect, 0.6, "0.0,1.0,0.01", "Fog")
 EDEN_ATMO_U_COLOR(fog_albedo, 0.85, 0.88, 0.92, "Fog")
+// A TINT combined with the real sky colour above the camera, rather than a finished colour: the
+// ambient HUE now follows the sky the fog actually sits under, so it goes gold at sunrise/sunset
+// and deep blue at dusk on its own. Only this colour's own brightness is used for the level --
+// the hue is renormalised -- so changing it re-tints without changing exposure.
 EDEN_ATMO_U_COLOR(fog_ambient_color, 0.36, 0.44, 0.58, "Fog")
 EDEN_ATMO_L_FLOAT(fog_ambient_day, 0.6, "0.0,4.0,0.01", "Fog")
 EDEN_ATMO_L_FLOAT(fog_ambient_night, 0.03, "0.0,1.0,0.001", "Fog")
@@ -365,8 +269,10 @@ EDEN_ATMO_L_FLOAT(fog_sun_scatter, 0.5, "0.0,1.0,0.01", "Fog")
 // Light rays (post-process)
 // =========================================================================================
 EDEN_ATMO_L_BOOL(light_rays_enabled, true, "Light Rays")
-// Samples per pixel per light, at quarter resolution. The main cost dial.
-EDEN_ATMO_L_INT(light_ray_samples, 16, "4,64,1", "Light Rays")
+// Samples per pixel per light, at quarter resolution. The main cost dial. Uncapped on purpose:
+// the ray march is a dynamic loop, so this costs exactly what is asked for and nothing clamps it
+// behind your back -- the slider merely stops suggesting values past 256.
+EDEN_ATMO_L_INT(light_ray_samples, 16, "4,256,1,or_greater", "Light Rays")
 // How far toward the light each pixel marches (1 = all the way). Longer = longer shafts.
 EDEN_ATMO_L_FLOAT(light_ray_density, 0.9, "0.05,1.0,0.01", "Light Rays")
 // Per-sample falloff. Closer to 1 = shafts carry further from the source.

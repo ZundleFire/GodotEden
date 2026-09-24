@@ -1,4 +1,5 @@
 #include "eden_planet_atmosphere.h"
+#include "eden_material_util.h"
 
 #include "core/config/engine.h"
 #include "eden_atmosphere_shaders.gen.h"
@@ -6,8 +7,12 @@
 #include "eden_planet_rings.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/main/viewport.h"
+#include "scene/main/window.h"
 #include "scene/resources/compositor.h"
 #include "scene/resources/environment.h"
+#ifdef TOOLS_ENABLED
+#include "editor/editor_interface.h"
+#endif
 
 // Earth reference values, duplicated from shaders/atmosphere_common.gdshaderinc. The two copies
 // must stay in step -- that is the price of evaluating one model on both CPU and GPU.
@@ -112,6 +117,15 @@ void EdenPlanetAtmosphere::remove_linked_material(const Ref<ShaderMaterial> &p_m
 	}
 }
 
+// Materials of sibling clouds/rings found at runtime. Kept out of the exported linked_materials: added there, the
+// editor saved each session's runtime materials into the scene, and they piled up (45 in _ocean_editor_probe.tscn,
+// every one a full shader copy, all receiving the whole uniform push every frame).
+void EdenPlanetAtmosphere::_auto_link(const Ref<ShaderMaterial> &p_material) {
+	if (p_material.is_valid() && !auto_linked_materials.has(p_material) && linked_materials.find(p_material) == -1) {
+		auto_linked_materials.push_back(p_material);
+	}
+}
+
 void EdenPlanetAtmosphere::set_sky_shader_override(const Ref<Shader> &p_shader) {
 	sky_shader_override = p_shader;
 	// Force a rebuild so the swap takes effect immediately in the editor.
@@ -124,22 +138,6 @@ void EdenPlanetAtmosphere::set_sky_shader_override(const Ref<Shader> &p_shader) 
 
 Ref<Shader> EdenPlanetAtmosphere::get_sky_shader_override() const {
 	return sky_shader_override;
-}
-
-void EdenPlanetAtmosphere::set_space_panorama(const Ref<Texture2D> &p_texture) {
-	space_panorama = p_texture;
-}
-
-Ref<Texture2D> EdenPlanetAtmosphere::get_space_panorama() const {
-	return space_panorama;
-}
-
-void EdenPlanetAtmosphere::set_space_overlay(const Ref<Texture2D> &p_texture) {
-	space_overlay = p_texture;
-}
-
-Ref<Texture2D> EdenPlanetAtmosphere::get_space_overlay() const {
-	return space_overlay;
 }
 
 void EdenPlanetAtmosphere::set_moon_texture(const Ref<Texture2D> &p_texture) {
@@ -156,14 +154,6 @@ void EdenPlanetAtmosphere::set_moonb_texture(const Ref<Texture2D> &p_texture) {
 
 Ref<Texture2D> EdenPlanetAtmosphere::get_moonb_texture() const {
 	return moonb_texture;
-}
-
-void EdenPlanetAtmosphere::set_parent_planet_texture(const Ref<Texture2D> &p_texture) {
-	parent_planet_texture = p_texture;
-}
-
-Ref<Texture2D> EdenPlanetAtmosphere::get_parent_planet_texture() const {
-	return parent_planet_texture;
 }
 
 static float _luma(const Vector3 &p_v) {
@@ -250,9 +240,41 @@ void EdenPlanetAtmosphere::_update_post_effect() {
 	fp.moon_direction = moon_direction;
 	fp.sun_fog_light = t_sun * fog_sun_intensity;
 	fp.moon_fog_light = Vector3(moon_col.x * t_moon.x, moon_col.y * t_moon.y, moon_col.z * t_moon.z) * (moon_bright * fog_moon_intensity);
-	// Ambient tracks the sky: bright by day, a faint floor at night.
+
+	// Ambient tracks the sky in HUE as well as brightness. Previously fog_ambient_color was the
+	// finished colour and only its brightness moved with the sun, so fog stayed the same authored
+	// blue at noon, at sunset and from orbit -- the one time fog most obviously should not be blue
+	// is the one time the old form could not express. Sampling the real sky the fog sits under
+	// makes it go gold at sunrise/sunset, deep blue at dusk, and pale at altitude, for five CPU
+	// scattering evaluations a frame (_push_ocean_sky already does 290 for the same integral).
+	// fog_ambient_color is now a TINT on that, so the authored value still shapes the result.
+	// Sampled at the camera, so it also tracks where the camera is, not just what time it is.
+	const Vector3 up = cam.normalized();
+	Vector3 horiz_a = up.cross(Vector3(0, 1, 0));
+	if (horiz_a.length_squared() < 1e-6f) {
+		horiz_a = up.cross(Vector3(1, 0, 0));
+	}
+	horiz_a.normalize();
+	const Vector3 horiz_b = up.cross(horiz_a).normalized();
+	// Up plus the four horizon quadrants: enough to pick up the sun's side of the sky being
+	// brighter and warmer than the opposite side, which is the whole point at a low sun.
+	Vector3 sky_amb = _sky_radiance(cam, up);
+	sky_amb += _sky_radiance(cam, (up * 0.35f + horiz_a).normalized());
+	sky_amb += _sky_radiance(cam, (up * 0.35f - horiz_a).normalized());
+	sky_amb += _sky_radiance(cam, (up * 0.35f + horiz_b).normalized());
+	sky_amb += _sky_radiance(cam, (up * 0.35f - horiz_b).normalized());
+	sky_amb /= 5.0f;
+	// Only the HUE comes from the sky; the brightness stays on the existing, already-tuned
+	// day/night curve. Letting the sky drive brightness too made fog several times brighter than
+	// before (sky radiance is post-sun_intensity, so it runs to a few units where the old constant
+	// was ~0.4) and washed the whole frame milky -- confirmed against a --no-fog capture.
+	const Vector3 tint(fog_ambient_color.r, fog_ambient_color.g, fog_ambient_color.b);
+	const float amb_luma = _luma(sky_amb);
+	const Vector3 sky_hue = amb_luma > 1e-5f ? sky_amb / amb_luma : Vector3(1, 1, 1);
+	Vector3 hue(tint.x * sky_hue.x, tint.y * sky_hue.y, tint.z * sky_hue.z);
+	hue /= MAX(_luma(hue), 1e-5f); // pure chromaticity, so the line below sets the level alone
 	const float ambient = fog_ambient_night + fog_ambient_day * sun_vis;
-	fp.fog_ambient = Vector3(fog_ambient_color.r, fog_ambient_color.g, fog_ambient_color.b) * ambient;
+	fp.fog_ambient = hue * (_luma(tint) * ambient);
 
 	// Rays fade with the light's own visibility, so a set sun casts none. Moon rays additionally
 	// wait for the sun to leave the sky -- by day the moon's surroundings are just bright sky.
@@ -331,7 +353,6 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 
 		case NOTIFICATION_PROCESS: {
 			const double delta = get_process_delta_time();
-			parent_planet_band_phase += (float)(delta * (double)parent_planet_band_speed);
 			if (day_length_seconds > 0.0) {
 				// Advance the exported phase itself rather than a separate clock, so freezing
 				// the cycle leaves the sun where it was and the inspector shows the true time.
@@ -351,6 +372,7 @@ void EdenPlanetAtmosphere::_notification(int p_what) {
 					(moonb_light == nullptr && !moonb_light_path.is_empty())) {
 				_resolve_nodes();
 			}
+			_collect_linked_nodes(delta);
 			_auto_setup();
 			_try_configure_environment();
 			_update_sun_direction();
@@ -428,7 +450,13 @@ void EdenPlanetAtmosphere::_auto_setup() {
 
 	if (auto_create_lights) {
 		_ensure_light(this, sun_light, sun_light_path, "Sun");
-		_ensure_light(this, moon_light, moon_light_path, "Moon")->set_shadow(true);
+		// Shadow set once at creation -- this runs every frame, and re-asserting it here used to
+		// override anyone turning the moon's shadow off (and _update_moon_light's daylight switch).
+		const bool had_moon = moon_light != nullptr;
+		DirectionalLight3D *moon = _ensure_light(this, moon_light, moon_light_path, "Moon");
+		if (!had_moon) {
+			moon->set_shadow(true);
+		}
 		if (sun2_enabled) {
 			_ensure_light(this, sun2_light, sun2_light_path, "Sun2");
 		}
@@ -487,7 +515,7 @@ void EdenPlanetAtmosphere::_auto_setup() {
 		cs->set_planet_center(planet_center);
 		add_child(cs, false, INTERNAL_MODE_BACK);
 		auto_cloud_shell = cs;
-		add_linked_material(cs->get_material());
+		_auto_link(cs->get_material());
 	}
 
 	// Auto-link any sibling EdenCloudShell / EdenPlanetRings -- clouds/rings placed as siblings
@@ -500,19 +528,148 @@ void EdenPlanetAtmosphere::_auto_setup() {
 	// got that glue code written -- it silently never happened. Idempotent (add_linked_material()
 	// already no-ops on a material already linked), so running this every frame just picks up
 	// anything added to the scene later for free.
-	Node *sibling_scope = get_parent();
-	if (sibling_scope != nullptr) {
-		for (int i = 0; i < sibling_scope->get_child_count(); i++) {
-			Node *sibling = sibling_scope->get_child(i);
-			EdenCloudShell *cs2 = Object::cast_to<EdenCloudShell>(sibling);
-			if (cs2 != nullptr) {
-				add_linked_material(cs2->get_material());
-			}
-			EdenPlanetRings *pr = Object::cast_to<EdenPlanetRings>(sibling);
-			if (pr != nullptr) {
-				add_linked_material(pr->get_material());
+	// Also: the placeholder planet mesh sits exactly at sea level, so next to an EdenPlanetOcean it
+	// z-fights the water and hides everything beneath it. Hidden while an ocean sibling exists
+	// (looked up by class name so this module doesn't depend on eden_ocean).
+	bool ocean_found = false;
+	for (const ObjectID &id : linked_nodes) {
+		Node *n = Object::cast_to<Node>(ObjectDB::get_instance(id));
+		if (n == nullptr || !n->is_inside_tree()) {
+			continue;
+		}
+		if (n->is_class("EdenPlanetOcean")) {
+			ocean_found = true;
+			_push_ocean_sky(n->call("get_material"));
+		}
+		EdenCloudShell *cs2 = Object::cast_to<EdenCloudShell>(n);
+		if (cs2 != nullptr) {
+			_auto_link(cs2->get_material());
+		}
+		EdenPlanetRings *pr = Object::cast_to<EdenPlanetRings>(n);
+		if (pr != nullptr) {
+			_auto_link(pr->get_material());
+		}
+	}
+	if (auto_planet_mesh != nullptr && auto_planet_mesh->is_visible() == ocean_found) {
+		auto_planet_mesh->set_visible(!ocean_found);
+	}
+}
+
+// Finds the nodes that need this atmosphere's per-frame state but are not its children: an
+// EdenPlanetOcean (which needs the baked sky radiance map and ambient cube for its own lighting),
+// an EdenCloudShell and EdenPlanetRings (which need sun_direction and the scattering set).
+//
+// Deliberately the WHOLE tree, not just this node's siblings. The siblings-only version was the
+// documented cause of the clouds' "north always lit" bug, and it had exactly the same effect one
+// node type over: an ocean placed anywhere but directly beside the atmosphere never received
+// sky_radiance_map at all, so sky_map_valid stayed false and the water fell back to the CONSTANT
+// sky_fallback_color. Its direct sunlight still tracked the sun (that comes from the
+// DirectionalLight3D, which is correct -- verified against sun_direction across declination and
+// spin axis), but its sky reflection and ambient did not move at all, so the two disagreed more
+// and more the further the sun got from wherever the fallback colour had been authored.
+//
+// Throttled rather than per-frame: find_children walks the entire scene, which is far too much to
+// do every frame, while the cached ObjectIDs are pushed to every frame as before.
+void EdenPlanetAtmosphere::_collect_linked_nodes(double p_delta) {
+	linked_rescan -= p_delta;
+	bool stale = linked_rescan <= 0.0;
+	// Also rescan immediately if anything cached has died, so removing and re-adding a node does
+	// not leave the scene unlit for up to the full interval.
+	for (const ObjectID &id : linked_nodes) {
+		Node *n = Object::cast_to<Node>(ObjectDB::get_instance(id));
+		if (n == nullptr || !n->is_inside_tree()) {
+			stale = true;
+			break;
+		}
+	}
+	if (!stale) {
+		return;
+	}
+	linked_rescan = 2.0;
+	linked_nodes.clear();
+	// Relinked from linked_nodes every frame (see _auto_setup), so dropping them here forgets freed shells
+	auto_linked_materials.clear();
+	if (EdenCloudShell *cs = Object::cast_to<EdenCloudShell>(auto_cloud_shell)) {
+		_auto_link(cs->get_material());
+	}
+	if (!is_inside_tree()) {
+		return;
+	}
+	// owned = false: auto-created nodes are internal and unowned, and a node instanced at runtime
+	// may have no owner either.
+	static const char *classes[3] = { "EdenPlanetOcean", "EdenCloudShell", "EdenPlanetRings" };
+	for (int c = 0; c < 3; c++) {
+		TypedArray<Node> found = get_tree()->get_root()->find_children("*", classes[c], true, false);
+		for (int i = 0; i < found.size(); i++) {
+			Node *n = Object::cast_to<Node>(found[i]);
+			if (n != nullptr) {
+				linked_nodes.push_back(n->get_instance_id());
 			}
 		}
+	}
+}
+
+// EdenPlanetOcean's fast sky lighting (ambient_light_disabled + its own sky term) needs what Godot's
+// radiance cubemap would have given it: sky radiance seen from the camera. Evaluated here with the
+// same CPU scattering integral that drives the clouds' sky_ambient_color, into a 24x12 world-space
+// equirect (~290 samples, a few hundred microseconds), plus an ambient cube: cosine-weighted mean
+// radiance around +-X/Y/Z. Pushed through the RenderingServer so none of it is saved into the scene
+// with the ocean's material.
+void EdenPlanetAtmosphere::_push_ocean_sky(const Ref<ShaderMaterial> &p_material) {
+	if (p_material.is_null()) {
+		return;
+	}
+	const int w = 24;
+	const int h = 12;
+	if (ocean_sky_image.is_null()) {
+		ocean_sky_image = Image::create_empty(w, h, false, Image::FORMAT_RGBAH);
+	}
+	const Vector3 cam = _camera_planet_relative();
+	static const Vector3 axes[6] = { Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, -1, 0), Vector3(0, 0, 1), Vector3(0, 0, -1) };
+	Vector3 amb[6];
+	float amb_w[6] = {};
+	for (int y = 0; y < h; y++) {
+		const float theta = Math::PI * (y + 0.5f) / h; // from +Y, matching acos(d.y) / PI in the shader
+		const float solid = Math::sin(theta); // equirect texel solid angle, up to a constant
+		for (int x = 0; x < w; x++) {
+			const float phi = Math::TAU * ((x + 0.5f) / w - 0.5f); // matching atan(d.z, d.x) / TAU + 0.5
+			const Vector3 d(Math::sin(theta) * Math::cos(phi), Math::cos(theta), Math::sin(theta) * Math::sin(phi));
+			Vector3 rad;
+			if (d.dot(sun_direction) > 0.9f) {
+				// A texel is ~15 degrees across. Point-sampled at its centre, the one holding the
+				// sun takes the narrow forward-scattering peak's full value for its whole area and
+				// reflects as a bright blob; box-filter the few texels near the sun instead.
+				for (int sy = -1; sy <= 1; sy++) {
+					for (int sx = -1; sx <= 1; sx++) {
+						const float t2 = theta + sy * (Math::PI / h) / 3.0f;
+						const float p2 = phi + sx * (Math::TAU / w) / 3.0f;
+						rad += _sky_radiance(cam, Vector3(Math::sin(t2) * Math::cos(p2), Math::cos(t2), Math::sin(t2) * Math::sin(p2)));
+					}
+				}
+				rad /= 9.0f;
+			} else {
+				rad = _sky_radiance(cam, d);
+			}
+			ocean_sky_image->set_pixel(x, y, Color(rad.x, rad.y, rad.z));
+			for (int k = 0; k < 6; k++) {
+				const float c = MAX(d.dot(axes[k]), 0.0f) * solid;
+				amb[k] += rad * c;
+				amb_w[k] += c;
+			}
+		}
+	}
+	if (ocean_sky_texture.is_null()) {
+		ocean_sky_texture = ImageTexture::create_from_image(ocean_sky_image);
+	} else {
+		ocean_sky_texture->update(ocean_sky_image);
+	}
+	RenderingServer *rs = RenderingServer::get_singleton();
+	const RID rid = p_material->get_rid();
+	rs->material_set_param(rid, "sky_radiance_map", ocean_sky_texture->get_rid());
+	rs->material_set_param(rid, "sky_map_valid", true);
+	static const char *names[6] = { "sky_ambient_px", "sky_ambient_nx", "sky_ambient_py", "sky_ambient_ny", "sky_ambient_pz", "sky_ambient_nz" };
+	for (int k = 0; k < 6; k++) {
+		rs->material_set_param(rid, names[k], amb[k] / MAX(amb_w[k], 1e-6f));
 	}
 }
 
@@ -536,7 +693,19 @@ void EdenPlanetAtmosphere::_build_sky() {
 	sky->set_radiance_size(Sky::RADIANCE_SIZE_128);
 	// The scattering integral is not cheap and refreshing the radiance cubemap every frame is
 	// wasted work when the sun barely moves. REALTIME only earns its cost with a running cycle.
-	sky->set_process_mode(day_length_seconds > 0.0 ? Sky::PROCESS_MODE_REALTIME : Sky::PROCESS_MODE_INCREMENTAL);
+	//
+	// In the editor, always use REALTIME regardless of day_length_seconds: this demo runs frozen
+	// (day_length_seconds == 0) by default, so INCREMENTAL is the normal case there, and its
+	// gradual convergence takes far more real frames than a quick look in the editor's static
+	// viewport gets -- confirmed this session via --capture: ambient-lit reflective surfaces
+	// (the ocean's near-mirror material) read with wildly wrong day/night brightness for several
+	// seconds after any sun_time_of_day change (including scene load) until the cubemap catches
+	// up. Editor responsiveness matters more than the perf cost of a realtime sky there.
+	bool editor_realtime = false;
+#ifdef TOOLS_ENABLED
+	editor_realtime = Engine::get_singleton()->is_editor_hint();
+#endif
+	sky->set_process_mode((day_length_seconds > 0.0 || editor_realtime) ? Sky::PROCESS_MODE_REALTIME : Sky::PROCESS_MODE_INCREMENTAL);
 }
 
 void EdenPlanetAtmosphere::_try_configure_environment() {
@@ -562,7 +731,21 @@ void EdenPlanetAtmosphere::_try_configure_environment() {
 	}
 	if (env->get_tonemapper() == Environment::TONE_MAPPER_LINEAR) {
 		// Scattering output is HDR; linear tonemapping clips the sun and the horizon.
-		env->set_tonemapper(Environment::TONE_MAPPER_ACES);
+		// Filmic rather than ACES: the scattering integral hands the tonemapper exactly the case
+		// ACES is worst at -- very bright, very saturated colour. ACES' RRT skews saturated reds
+		// and oranges toward yellow and desaturates them toward white as luminance rises, so a
+		// sunset sky at a luminance of a few units arrives on screen as pale cream and the sun disc
+		// (sun_intensity * sun_disc_brightness, ~660) as a flat white blob with a bleached
+		// surround. That is the "sunsets aren't coloured / the sun is overpowered" failure, and no
+		// amount of tuning sun_intensity fixes it because the hue skew is in the transform, not the
+		// input. Measured over the demo's capture poses, Filmic held the most saturation at the
+		// horizon and lost the least of the night sky; AGX was a close second, ACES clearly last.
+		//
+		// Only a fallback: a scene that has already chosen a tonemapper keeps it, and the choice
+		// matters less than Environment::tonemap_exposure, which this deliberately does not touch
+		// -- exposure is a per-project art decision, and at the 1.0 default every curve here reads
+		// flat and washed out.
+		env->set_tonemapper(Environment::TONE_MAPPER_FILMIC);
 	}
 	env_configured = true;
 }
@@ -720,22 +903,51 @@ void EdenPlanetAtmosphere::_update_sun_light() {
 		sun_light->look_at_from_position(origin, origin - sun_direction, up_ref);
 	}
 
-	const Vector3 t = _sun_transmittance(_camera_planet_relative());
+	// Removed this session: this used to drive the light's colour/energy from CPU-computed
+	// atmospheric transmittance (sunset reddening, night dimming) at some single reference point.
+	// That was never supposed to touch terrain lighting at all -- the reddening/dimming effect
+	// belongs entirely to the atmosphere itself (sky, clouds, fog), which already computes it
+	// correctly and independently, per-pixel, via their own sun_transmittance() calls in the GPU
+	// shaders (see atmosphere_common.gdshaderinc) -- based on how far that specific ray's light
+	// actually travels through the atmosphere, exactly the real physical mechanism. Piping a
+	// second, CPU-side, single-point version of the same idea into the one shared terrain light
+	// was redundant with that, and outright wrong for it: no single reference point can represent
+	// "how lit is the terrain in this view" for anything but a camera standing right on the
+	// ground, which is exactly the bug repeatedly root-caused (and re-broken) this session. Plain
+	// Lambertian N.L plus real-time shadows already light terrain correctly on their own, with a
+	// constant, undistorted sun colour and energy -- no CPU help needed or wanted.
+	// Atmospheric extinction on the terrain/water light. The removal noted above was right that a
+	// single CPU reference point cannot describe terrain lighting for an ORBITAL camera -- but
+	// pinning the light to full-strength white instead meant the ground and the ocean were lit at
+	// noon intensity and noon colour at sunset, under an orange sky. A --capture pass showed it
+	// plainly: sun_rgb=(1,1,1) energy=1.00 at all sixteen poses, midnight included, with the water
+	// blown to white beneath a gold horizon.
+	//
+	// So: hue and level from the real transmittance at the camera, NORMALISED against the
+	// transmittance straight up at the same altitude. That reference is what keeps this honest --
+	// at a high sun the ratio is 1 and the light is exactly the unattenuated white it is today, so
+	// nothing that was already tuned moves; it only departs from white as the sun nears the
+	// horizon, which is the case the old code could not express at all.
+	const Vector3 cam = _camera_planet_relative();
+	const Vector3 up = cam.normalized();
+	const Vector3 t_sun = _transmittance_toward(cam, sun_direction);
+	const Vector3 t_ref = _transmittance_toward(cam, up, false); // sun overhead, no shadow term
+	const float ref_luma = MAX(_luma(t_ref), 1e-4f);
+	// Above the atmosphere there is no single ground point this can stand for (the camera sees day
+	// and night at once), so fade back to plain white -- the documented orbital case.
+	const float cam_altitude = cam.length() - planet_radius;
+	const float a = CLAMP((cam_altitude - atmosphere_height * 0.35f) / MAX(atmosphere_height * 0.65f, 1.0f), 0.0f, 1.0f);
+	const float in_air = 1.0f - a * a * (3.0f - 2.0f * a);
 
-	// Split transmittance into hue and brightness: light_color carries the sunset reddening,
-	// light_energy carries the dimming. Driving both through the colour would fight Godot's
-	// tonemapping and wash out at noon.
-	const float peak = MAX(MAX(t.x, t.y), t.z);
-	if (peak <= 1e-5f) {
-		sun_light->set_color(Color(1, 1, 1));
-		sun_light->set_param(Light3D::PARAM_ENERGY, sun_light_energy * night_light_floor);
-		return;
-	}
-	const Vector3 hue = t / peak;
-	sun_light->set_color(Color(hue.x, hue.y, hue.z));
-	// Luminance-weighted, so a red-shifted sun reads as dimmer than a white one.
-	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
-	sun_light->set_param(Light3D::PARAM_ENERGY, sun_light_energy * MAX(luma, night_light_floor));
+	const float scale = CLAMP(_luma(t_sun) / ref_luma, 0.0f, 1.0f);
+	const float peak = MAX(t_sun.x, MAX(t_sun.y, t_sun.z));
+	// Pure hue: divided by its own brightest channel, so `scale` alone sets the level.
+	const Vector3 hue = peak > 1e-5f ? t_sun / peak : Vector3(1, 1, 1);
+	sun_light->set_color(Color(
+			Math::lerp(1.0f, hue.x, in_air),
+			Math::lerp(1.0f, hue.y, in_air),
+			Math::lerp(1.0f, hue.z, in_air)));
+	sun_light->set_param(Light3D::PARAM_ENERGY, sun_light_energy * Math::lerp(1.0f, scale, in_air));
 }
 
 void EdenPlanetAtmosphere::_update_sun2_light() {
@@ -752,19 +964,10 @@ void EdenPlanetAtmosphere::_update_sun2_light() {
 		sun2_light->look_at_from_position(origin, origin - sun2_direction, up_ref);
 	}
 
-	// Reuses the same CPU scattering mirror as the primary sun, just evaluated toward sun2's own
-	// direction -- it gets the same horizon reddening and planet-shadow occlusion for free.
-	const Vector3 t = _transmittance_toward(_camera_planet_relative(), sun2_direction);
-	const float peak = MAX(MAX(t.x, t.y), t.z);
-	if (peak <= 1e-5f) {
-		sun2_light->set_color(Color(sun2_tint.r, sun2_tint.g, sun2_tint.b));
-		sun2_light->set_param(Light3D::PARAM_ENERGY, sun2_light_energy * sun2_night_light_floor);
-		return;
-	}
-	const Vector3 hue = t / peak;
-	sun2_light->set_color(Color(sun2_tint.r * hue.x, sun2_tint.g * hue.y, sun2_tint.b * hue.z));
-	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
-	sun2_light->set_param(Light3D::PARAM_ENERGY, sun2_light_energy * MAX(luma, sun2_night_light_floor));
+	// See _update_sun_light()'s comment: atmospheric reddening/dimming belongs to the atmosphere
+	// shaders alone, not this terrain-lighting light. Plain constant colour/energy.
+	sun2_light->set_color(Color(sun2_tint.r, sun2_tint.g, sun2_tint.b));
+	sun2_light->set_param(Light3D::PARAM_ENERGY, sun2_light_energy);
 	if (sun2_light->is_visible() != sun2_enabled) {
 		sun2_light->set_visible(sun2_enabled);
 	}
@@ -785,30 +988,46 @@ void EdenPlanetAtmosphere::_update_moon_light() {
 		moon_light->look_at_from_position(origin, origin - moon_direction, up_ref);
 	}
 
-	// Same extinction and horizon occlusion as sunlight: moonlight reddens as the moon sets and
-	// fades smoothly behind the planet instead of snapping off.
-	const Vector3 t = _transmittance_toward(_camera_planet_relative(), moon_direction);
-
 	// Reflected light scales steeply with phase. Half moon is only ~10% of full on Earth (the
-	// opposition surge), which a linear falloff badly overstates; the exponent is the knob.
+	// opposition surge), which a linear falloff badly overstates; the exponent is the knob. This
+	// is real physics about the MOON itself (is it lit by the sun at all right now) -- unlike the
+	// atmospheric extinction this function used to also apply (see _update_sun_light()'s comment
+	// for why that was removed), phase is not an atmosphere effect and stays.
 	const float phase_brightness = Math::pow(get_moon_illumination(), MAX(moon_light_phase_exponent, 0.0f));
+	const float energy = moon_light_energy * moon_intensity * phase_brightness;
 
-	const float peak = MAX(MAX(t.x, t.y), t.z);
-	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
-	const float energy = moon_light_energy * moon_intensity * phase_brightness * luma;
-
-	if (peak > 1e-5f) {
-		const Vector3 hue = t / peak;
-		moon_light->set_color(Color(moon_light_color.r * hue.x, moon_light_color.g * hue.y, moon_light_color.b * hue.z));
-	}
+	moon_light->set_color(moon_light_color);
 	moon_light->set_param(Light3D::PARAM_ENERGY, energy);
 
 	if (moon_light_hide_when_dark) {
 		// A second shadowed directional light is a whole extra shadow pass. Below the horizon, at
 		// new moon or in daylight it contributes nothing, so switch it off rather than pay for it.
-		const bool lit = energy > 1e-3f;
+		bool lit = energy > 1e-3f;
+		// Also off in daylight while the camera is inside the atmosphere: next to the sun it adds
+		// nothing visible, but a second directional light is still evaluated on every lit pixel
+		// (~0.8 ms at 1080p on a GTX 750 Ti). From orbit it stays on -- the night side is in view.
+		// Auto-created moon only.
+		if (moon_light_path.is_empty()) {
+			const Vector3 cam = _camera_planet_relative();
+			const bool day = sun_direction.dot(cam.normalized()) > 0.05f;
+			if (day && cam.length() < planet_radius + atmosphere_height) {
+				lit = false;
+			}
+		}
 		if (moon_light->is_visible() != lit) {
 			moon_light->set_visible(lit);
+		}
+		// In daylight moon shadows are invisible under the sun's, but still cost a whole extra
+		// shadow pass plus a cascade lookup on every lit pixel (measured ~2.8 ms at 1080p on a GTX
+		// 750 Ti). The light stays on -- from orbit it still lights the night side -- only its
+		// shadow follows day/night at the camera. Auto-created moon only; a moon light you supplied
+		// keeps whatever shadow setting you gave it.
+		if (moon_light_path.is_empty()) {
+			const float sun_elevation = sun_direction.dot(_camera_planet_relative().normalized());
+			const bool night = sun_elevation < 0.05f;
+			if (moon_light->has_shadow() != night) {
+				moon_light->set_shadow(night);
+			}
 		}
 	}
 }
@@ -827,17 +1046,12 @@ void EdenPlanetAtmosphere::_update_moonb_light() {
 		moonb_light->look_at_from_position(origin, origin - moonb_direction, up_ref);
 	}
 
-	const Vector3 t = _transmittance_toward(_camera_planet_relative(), moonb_direction);
+	// See _update_moon_light()'s comment: phase is real physics and stays; atmospheric extinction
+	// does not belong to this terrain-lighting light and was removed.
 	const float phase_brightness = Math::pow(get_moonb_illumination(), MAX(moonb_light_phase_exponent, 0.0f));
+	const float energy = moonb_light_energy * moonb_intensity * phase_brightness;
 
-	const float peak = MAX(MAX(t.x, t.y), t.z);
-	const float luma = t.x * 0.2126f + t.y * 0.7152f + t.z * 0.0722f;
-	const float energy = moonb_light_energy * moonb_intensity * phase_brightness * luma;
-
-	if (peak > 1e-5f) {
-		const Vector3 hue = t / peak;
-		moonb_light->set_color(Color(moonb_light_color.r * hue.x, moonb_light_color.g * hue.y, moonb_light_color.b * hue.z));
-	}
+	moonb_light->set_color(moonb_light_color);
 	moonb_light->set_param(Light3D::PARAM_ENERGY, energy);
 
 	if (moonb_light_hide_when_dark) {
@@ -861,6 +1075,29 @@ Vector3 EdenPlanetAtmosphere::_camera_planet_relative() const {
 			}
 		}
 	}
+#ifdef TOOLS_ENABLED
+	// Root-caused this session: a scene's own Camera3D (the FlyCamera atmosphere_demo.gd builds
+	// at runtime, say) only exists while the scene is actually PLAYING. While just navigating the
+	// editor's own static 3D viewport -- no Play, no running game -- get_viewport()->get_camera_3d()
+	// above finds nothing, and this fell back to get_global_position(), this NODE's own static
+	// position, completely disconnected from wherever the editor camera is actually looking. Every
+	// lighting/shadow calculation driven from this function was therefore looking at the wrong
+	// point the entire time someone was just orbiting the editor view -- not a bug in any of that
+	// downstream math, a bug in what point it was ever being asked about. Falls back to the
+	// editor's own 3D viewport camera specifically when the scene isn't running.
+	if (Engine::get_singleton()->is_editor_hint()) {
+		EditorInterface *ei = EditorInterface::get_singleton();
+		if (ei != nullptr) {
+			SubViewport *editor_vp = ei->get_editor_viewport_3d(0);
+			if (editor_vp != nullptr) {
+				Camera3D *editor_cam = editor_vp->get_camera_3d();
+				if (editor_cam != nullptr) {
+					world_pos = editor_cam->get_global_position();
+				}
+			}
+		}
+	}
+#endif
 	Vector3 p = world_pos - planet_center;
 	// Guard the exactly-on-the-surface case: the shadow test degenerates when |p| == radius.
 	const float r = p.length();
@@ -893,6 +1130,22 @@ float EdenPlanetAtmosphere::_beta_mie() const {
 	return (float)(BETA_MIE_EARTH * (EARTH_MIE_SCALE_H / MAX((double)mie_scale_height, 1.0))) * mie_strength;
 }
 
+// Mirrors beta_ozone() / ozone_density() in atmosphere_common.gdshaderinc. Ozone absorbs and does
+// not scatter, so it only ever appears in extinction, never in an in-scatter sum. See the shader
+// for why the coefficients peak in green and what that fixes.
+Vector3 EdenPlanetAtmosphere::_beta_ozone() const {
+	static const Vector3 BETA_OZONE_EARTH(0.650e-6f, 1.881e-6f, 0.085e-6f);
+	const float scale = (float)(EARTH_RAYLEIGH_SCALE_H / MAX((double)rayleigh_scale_height, 1.0));
+	// rayleigh_strength included deliberately -- see beta_ozone() in atmosphere_common.gdshaderinc.
+	return BETA_OZONE_EARTH * scale * rayleigh_strength * ozone_strength;
+}
+
+float EdenPlanetAtmosphere::_ozone_density(float p_altitude) const {
+	const float peak = 3.125f * rayleigh_scale_height;
+	const float width = 1.875f * MAX(rayleigh_scale_height, 1.0f);
+	return MAX(0.0f, 1.0f - Math::abs(p_altitude - peak) / width);
+}
+
 Vector2 EdenPlanetAtmosphere::_ray_sphere(const Vector3 &p_ro, const Vector3 &p_rd, float p_radius) const {
 	const float b = p_ro.dot(p_rd);
 	const float c = p_ro.dot(p_ro) - p_radius * p_radius;
@@ -919,33 +1172,35 @@ float EdenPlanetAtmosphere::_planet_shadow_dir(const Vector3 &p_point, const Vec
 	return t * t * (3.0f - 2.0f * t);
 }
 
-Vector2 EdenPlanetAtmosphere::_optical_depth_along(const Vector3 &p_point, const Vector3 &p_dir) const {
+Vector3 EdenPlanetAtmosphere::_optical_depth_along(const Vector3 &p_point, const Vector3 &p_dir) const {
 	const Vector2 atm = _ray_sphere(p_point, p_dir, planet_radius + atmosphere_height);
 	const float t_end = MAX(atm.y, 0.0f);
 	if (t_end <= 0.0f) {
-		return Vector2();
+		return Vector3();
 	}
 	const float step = t_end / (float)SUN_STEPS;
-	Vector2 depth;
+	Vector3 depth; // (rayleigh, mie, ozone)
 	float t = step * 0.5f;
 	for (int i = 0; i < SUN_STEPS; i++) {
 		const float h = MAX((p_point + p_dir * t).length() - planet_radius, 0.0f);
 		depth.x += Math::exp(-h / rayleigh_scale_height) * step;
 		depth.y += Math::exp(-h / mie_scale_height) * step;
+		depth.z += _ozone_density(h) * step;
 		t += step;
 	}
 	return depth;
 }
 
-Vector3 EdenPlanetAtmosphere::_transmittance_toward(const Vector3 &p_point, const Vector3 &p_dir) const {
-	const Vector2 depth = _optical_depth_along(p_point, p_dir);
+Vector3 EdenPlanetAtmosphere::_transmittance_toward(const Vector3 &p_point, const Vector3 &p_dir, bool p_apply_shadow) const {
+	const Vector3 depth = _optical_depth_along(p_point, p_dir);
 	const Vector3 br = _beta_rayleigh();
 	const float bm = _beta_mie() * (float)MIE_EXTINCTION_FACTOR;
-	const float shadow = _planet_shadow_dir(p_point, p_dir);
+	const Vector3 bo = _beta_ozone();
+	const float shadow = p_apply_shadow ? _planet_shadow_dir(p_point, p_dir) : 1.0f;
 	return Vector3(
-				   Math::exp(-(br.x * depth.x + bm * depth.y)),
-				   Math::exp(-(br.y * depth.x + bm * depth.y)),
-				   Math::exp(-(br.z * depth.x + bm * depth.y))) *
+				   Math::exp(-(br.x * depth.x + bm * depth.y + bo.x * depth.z)),
+				   Math::exp(-(br.y * depth.x + bm * depth.y + bo.y * depth.z)),
+				   Math::exp(-(br.z * depth.x + bm * depth.y + bo.z * depth.z))) *
 			shadow;
 }
 
@@ -971,9 +1226,10 @@ Vector3 EdenPlanetAtmosphere::_sky_radiance(const Vector3 &p_point, const Vector
 	const float ph_m = (3.0f * (1.0f - g2)) / (2.0f * (2.0f + g2)) * (1.0f + mu * mu) /
 			MAX(Math::pow(1.0f + g2 - 2.0f * g * mu, 1.5f), 1e-4f);
 
+	const Vector3 bo = _beta_ozone();
 	const int steps = 8;
 	const float step = (t_end - t_start) / (float)steps;
-	Vector2 view_depth;
+	Vector3 view_depth; // (rayleigh, mie, ozone)
 	Vector3 sum_r, sum_m;
 	float t = t_start + step * 0.5f;
 	for (int i = 0; i < steps; i++) {
@@ -981,9 +1237,12 @@ Vector3 EdenPlanetAtmosphere::_sky_radiance(const Vector3 &p_point, const Vector
 		const float h = MAX(p.length() - planet_radius, 0.0f);
 		const float d_r = Math::exp(-h / rayleigh_scale_height) * step;
 		const float d_m = Math::exp(-h / mie_scale_height) * step;
-		view_depth += Vector2(d_r, d_m);
-		const Vector2 sun_depth = _optical_depth_along(p, sun_direction);
-		const Vector3 tau = br * (view_depth.x + sun_depth.x) + Vector3(1, 1, 1) * (bm * (float)MIE_EXTINCTION_FACTOR * (view_depth.y + sun_depth.y));
+		// Ozone enters tau only -- no sum_* term, because it absorbs rather than scatters.
+		view_depth += Vector3(d_r, d_m, _ozone_density(h) * step);
+		const Vector3 sun_depth = _optical_depth_along(p, sun_direction);
+		const Vector3 tau = br * (view_depth.x + sun_depth.x) +
+				Vector3(1, 1, 1) * (bm * (float)MIE_EXTINCTION_FACTOR * (view_depth.y + sun_depth.y)) +
+				bo * (view_depth.z + sun_depth.z);
 		const Vector3 att = Vector3(Math::exp(-tau.x), Math::exp(-tau.y), Math::exp(-tau.z)) * _planet_shadow_dir(p, sun_direction);
 		sum_r += att * d_r;
 		sum_m += att * d_m;
@@ -997,7 +1256,7 @@ float EdenPlanetAtmosphere::_planet_shadow(const Vector3 &p_point) const {
 	return _planet_shadow_dir(p_point, sun_direction);
 }
 
-Vector2 EdenPlanetAtmosphere::_optical_depth_to_sun(const Vector3 &p_point) const {
+Vector3 EdenPlanetAtmosphere::_optical_depth_to_sun(const Vector3 &p_point) const {
 	return _optical_depth_along(p_point, sun_direction);
 }
 
@@ -1029,6 +1288,8 @@ void EdenPlanetAtmosphere::_bake_transmittance_lut() {
 	}
 	// Valid because the atmosphere is spherically symmetric: the sun-ward integral depends only
 	// on altitude and the sun's angle to local up, never on where the point is.
+	// ozone_strength is deliberately NOT in the signature: the LUT stores raw densities, and the
+	// beta multiply (which is where ozone_strength lands) happens at sample time.
 	const String signature = vformat("%f|%f|%f|%f|%d|%d|%d", planet_radius, atmosphere_height,
 			rayleigh_scale_height, mie_scale_height, lut_width, lut_height, lut_steps);
 	if (signature == lut_signature && lut_texture.is_valid()) {
@@ -1040,9 +1301,10 @@ void EdenPlanetAtmosphere::_bake_transmittance_lut() {
 	const int steps = MAX(lut_steps, 2);
 	const float r_atm = planet_radius + atmosphere_height;
 
-	// RGH = two half floats. Depths reach ~1.4e4 m, well inside half-float range, and its
-	// ~0.1% relative precision is far below anything visible after the beta multiply.
-	Ref<Image> img = Image::create_empty(w, h, false, Image::FORMAT_RGH);
+	// RGBH = four half floats; was RGH until ozone needed a third density channel. Depths reach
+	// ~1.4e4 m, well inside half-float range, and its ~0.1% relative precision is far below
+	// anything visible after the beta multiply.
+	Ref<Image> img = Image::create_empty(w, h, false, Image::FORMAT_RGBAH);
 
 	for (int yi = 0; yi < h; yi++) {
 		const float alt = ((float)yi + 0.5f) / (float)h * atmosphere_height;
@@ -1056,7 +1318,7 @@ void EdenPlanetAtmosphere::_bake_transmittance_lut() {
 
 			const Vector2 hit = _ray_sphere(p, s, r_atm);
 			const float t_end = MAX(hit.y, 0.0f);
-			Vector2 depth;
+			Vector3 depth; // (rayleigh, mie, ozone)
 			if (t_end > 0.0f) {
 				const float step = t_end / (float)steps;
 				float t = step * 0.5f;
@@ -1064,10 +1326,11 @@ void EdenPlanetAtmosphere::_bake_transmittance_lut() {
 					const float alt_s = MAX((p + s * t).length() - planet_radius, 0.0f);
 					depth.x += Math::exp(-alt_s / rayleigh_scale_height) * step;
 					depth.y += Math::exp(-alt_s / mie_scale_height) * step;
+					depth.z += _ozone_density(alt_s) * step;
 					t += step;
 				}
 			}
-			img->set_pixel(xi, yi, Color(depth.x, depth.y, 0.0f, 1.0f));
+			img->set_pixel(xi, yi, Color(depth.x, depth.y, depth.z, 1.0f));
 		}
 	}
 
@@ -1084,13 +1347,22 @@ void EdenPlanetAtmosphere::_bake_transmittance_lut() {
 // ===========================================================================================
 void EdenPlanetAtmosphere::_set_on_all(const StringName &p_param, const Variant &p_value) {
 	if (sky_material.is_valid()) {
-		sky_material->set_shader_parameter(p_param, p_value);
+		eden_set_param(sky_material, p_param, p_value);
 	}
 	for (int i = 0; i < linked_materials.size(); i++) {
 		Ref<ShaderMaterial> mat = linked_materials[i];
 		if (mat.is_valid()) {
-			mat->set_shader_parameter(p_param, p_value);
+			eden_set_param(mat, p_param, p_value);
 		}
+	}
+	// Auto-linked clouds/rings push their own planet geometry every frame, after this node. Pushing ours too made the
+	// two fight over it (39900 vs 40000 in _ocean_editor_probe.tscn), re-uploading both materials every frame; the
+	// node's own value is what always ended up rendered, so leaving it to them changes nothing on screen.
+	if (p_param == SNAME("planet_radius") || p_param == SNAME("planet_center")) {
+		return;
+	}
+	for (const Ref<ShaderMaterial> &mat : auto_linked_materials) {
+		eden_set_param(mat, p_param, p_value);
 	}
 }
 
@@ -1146,12 +1418,6 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 	_set_on_all(SNAME("moonb_texture_rotation"), Math::deg_to_rad(moonb_texture_rotation_deg));
 	_set_on_all(SNAME("moonb_enabled"), moonb_enabled);
 
-	_set_on_all(SNAME("parent_planet_enabled"), parent_planet_enabled);
-	_set_on_all(SNAME("parent_planet_texture"), parent_planet_texture);
-	_set_on_all(SNAME("parent_planet_texture_enabled"), parent_planet_texture.is_valid());
-	_set_on_all(SNAME("parent_planet_texture_rotation"), Math::deg_to_rad(parent_planet_texture_rotation_deg));
-	_set_on_all(SNAME("parent_planet_band_time"), parent_planet_band_phase);
-
 	// (dither_resolution used to be pushed here for the sky's raymarch jitter. Removed: the sky
 	// shader now reads FRAGCOORD directly, which Godot's sky shader stage actually provides -- no
 	// CPU-guessed viewport size needed, and no risk of it disagreeing with whatever the sky is
@@ -1161,27 +1427,6 @@ void EdenPlanetAtmosphere::_push_uniforms() {
 	_bake_transmittance_lut();
 	_set_on_all(SNAME("transmittance_lut"), lut_texture);
 	_set_on_all(SNAME("use_transmittance_lut"), lut_enabled && lut_texture.is_valid());
-
-	// Deep space. The _enabled flags let the shader skip the whole panorama path and fall back
-	// to procedural stars, so an empty slot costs nothing rather than sampling a black texture.
-	_set_on_all(SNAME("space_panorama"), space_panorama);
-	_set_on_all(SNAME("space_panorama_enabled"), space_panorama.is_valid());
-	_set_on_all(SNAME("space_overlay"), space_overlay);
-	_set_on_all(SNAME("space_overlay_enabled"), space_overlay.is_valid());
-	// Once real space art is loaded the procedural star field is usually unwanted -- it doubles
-	// up the stars and, at full strength, visually drowns a panorama. This overrides the
-	// star_intensity the table pushed a moment ago.
-	if (space_panorama.is_valid() || space_overlay.is_valid()) {
-		_set_on_all(SNAME("star_intensity"), star_intensity_with_panorama);
-	}
-	// The celestial sphere is fixed while the planet turns, so the starfield tracks the same
-	// phase the sun does. Coupling at 0 pins it; the offset orients a galaxy band.
-	const float space_angle = (float)(Math::TAU * (double)sun_time_of_day * (double)space_day_coupling) +
-			Math::deg_to_rad(space_rotation_offset_deg);
-	_set_on_all(SNAME("space_rotation_angle"), space_angle);
-	// Overlay rides the same day-coupled rotation, plus its own fixed offset, so a nebula can
-	// sit at its own angle instead of being locked to the base starfield's orientation.
-	_set_on_all(SNAME("space_overlay_rotation_angle"), space_angle + Math::deg_to_rad(space_overlay_rotation_offset_deg));
 }
 
 // ===========================================================================================
@@ -1264,9 +1509,6 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("remove_linked_material", "material"), &EdenPlanetAtmosphere::remove_linked_material);
 	ClassDB::bind_method(D_METHOD("set_sky_shader_override", "shader"), &EdenPlanetAtmosphere::set_sky_shader_override);
 	ClassDB::bind_method(D_METHOD("get_sky_shader_override"), &EdenPlanetAtmosphere::get_sky_shader_override);
-	ClassDB::bind_method(D_METHOD("set_space_panorama", "texture"), &EdenPlanetAtmosphere::set_space_panorama);
-	ClassDB::bind_method(D_METHOD("get_space_panorama"), &EdenPlanetAtmosphere::get_space_panorama);
-	ClassDB::bind_method(D_METHOD("set_space_overlay", "texture"), &EdenPlanetAtmosphere::set_space_overlay);
 	ClassDB::bind_method(D_METHOD("set_moon_texture", "texture"), &EdenPlanetAtmosphere::set_moon_texture);
 	ClassDB::bind_method(D_METHOD("get_moon_texture"), &EdenPlanetAtmosphere::get_moon_texture);
 	ClassDB::bind_method(D_METHOD("get_moon_illumination"), &EdenPlanetAtmosphere::get_moon_illumination);
@@ -1275,9 +1517,6 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_moonb_texture", "texture"), &EdenPlanetAtmosphere::set_moonb_texture);
 	ClassDB::bind_method(D_METHOD("get_moonb_texture"), &EdenPlanetAtmosphere::get_moonb_texture);
 	ClassDB::bind_method(D_METHOD("get_moonb_illumination"), &EdenPlanetAtmosphere::get_moonb_illumination);
-	ClassDB::bind_method(D_METHOD("set_parent_planet_texture", "texture"), &EdenPlanetAtmosphere::set_parent_planet_texture);
-	ClassDB::bind_method(D_METHOD("get_parent_planet_texture"), &EdenPlanetAtmosphere::get_parent_planet_texture);
-	ClassDB::bind_method(D_METHOD("get_space_overlay"), &EdenPlanetAtmosphere::get_space_overlay);
 
 	ClassDB::bind_method(D_METHOD("get_sun_direction"), &EdenPlanetAtmosphere::get_sun_direction);
 	ClassDB::bind_method(D_METHOD("get_sun2_direction"), &EdenPlanetAtmosphere::get_sun2_direction);
@@ -1303,12 +1542,6 @@ void EdenPlanetAtmosphere::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "sky_shader_override", PROPERTY_HINT_RESOURCE_TYPE, "Shader"),
 			"set_sky_shader_override", "get_sky_shader_override");
 
-	ADD_GROUP("Space", "");
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "space_panorama", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
-			"set_space_panorama", "get_space_panorama");
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "space_overlay", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
-			"set_space_overlay", "get_space_overlay");
-
 	ADD_GROUP("Moon", "");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "moon_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
 			"set_moon_texture", "get_moon_texture");
@@ -1316,8 +1549,6 @@ void EdenPlanetAtmosphere::_bind_methods() {
 			"set_moonb_light_path", "get_moonb_light_path");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "moonb_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
 			"set_moonb_texture", "get_moonb_texture");
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "parent_planet_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"),
-			"set_parent_planet_texture", "get_parent_planet_texture");
 
 	// Inspector properties, grouped as declared in the table.
 #define EDEN_ATMO_U_FLOAT(m_name, m_default, m_hint, m_group)                                              \

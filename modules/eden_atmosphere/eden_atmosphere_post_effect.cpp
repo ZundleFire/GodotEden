@@ -13,6 +13,7 @@
 // exists ("Condition !configured" at startup) and ends up an empty, unusable name.
 static const char *CONTEXT_NAME = "eden_atmosphere";
 static const char *RAYS_TEXTURE = "light_rays";
+static const char *EMISSION_TEXTURE = "light_ray_emission";
 
 // Must match the Params block in shaders/atmosphere_post_common.glsl: 2 mat4 + 15 vec4.
 static const int PARAMS_FLOAT_COUNT = 16 * 2 + 4 * 16;
@@ -40,17 +41,17 @@ EdenAtmospherePostEffect::~EdenAtmospherePostEffect() {
 	}
 	// GPU resources belong to the render thread. Bind the RIDs by value -- `this` is going away.
 	rs->call_on_render_thread(callable_mp_static(&EdenAtmospherePostEffect::_free_rids)
-									  .bind(rays_shader, fog_shader, params_ubo, linear_sampler, nearest_sampler));
+									  .bind(rays_shader, emission_shader, fog_shader, params_ubo, linear_sampler, nearest_sampler));
 }
 
-void EdenAtmospherePostEffect::_free_rids(RID p_rays_shader, RID p_fog_shader, RID p_ubo, RID p_linear, RID p_nearest) {
+void EdenAtmospherePostEffect::_free_rids(RID p_rays_shader, RID p_emission_shader, RID p_fog_shader, RID p_ubo, RID p_linear, RID p_nearest) {
 	RenderingServer *rs = RenderingServer::get_singleton();
 	RenderingDevice *rd = rs != nullptr ? rs->get_rendering_device() : nullptr;
 	if (rd == nullptr) {
 		return;
 	}
 	// Freeing a shader also frees the pipelines and cached uniform sets built on it.
-	for (const RID &rid : { p_rays_shader, p_fog_shader, p_ubo, p_linear, p_nearest }) {
+	for (const RID &rid : { p_rays_shader, p_emission_shader, p_fog_shader, p_ubo, p_linear, p_nearest }) {
 		if (rid.is_valid()) {
 			rd->free_rid(rid);
 		}
@@ -86,7 +87,7 @@ RID EdenAtmospherePostEffect::_compile(RenderingDevice *p_rd, const char *p_sour
 }
 
 bool EdenAtmospherePostEffect::_ensure_pipelines(RenderingDevice *p_rd) {
-	if (rays_pipeline.is_valid() && fog_pipeline.is_valid()) {
+	if (rays_pipeline.is_valid() && emission_pipeline.is_valid() && fog_pipeline.is_valid()) {
 		return true;
 	}
 	if (pipelines_failed) {
@@ -94,12 +95,14 @@ bool EdenAtmospherePostEffect::_ensure_pipelines(RenderingDevice *p_rd) {
 	}
 
 	rays_shader = _compile(p_rd, EDEN_RAYS_COMPUTE_CODE, "EdenAtmosphereRays");
+	emission_shader = _compile(p_rd, EDEN_RAY_EMISSION_COMPUTE_CODE, "EdenAtmosphereRayEmission");
 	fog_shader = _compile(p_rd, EDEN_FOG_COMPOSITE_COMPUTE_CODE, "EdenAtmosphereFogComposite");
-	if (!rays_shader.is_valid() || !fog_shader.is_valid()) {
+	if (!rays_shader.is_valid() || !emission_shader.is_valid() || !fog_shader.is_valid()) {
 		pipelines_failed = true;
 		return false;
 	}
 	rays_pipeline = p_rd->compute_pipeline_create(rays_shader);
+	emission_pipeline = p_rd->compute_pipeline_create(emission_shader);
 	fog_pipeline = p_rd->compute_pipeline_create(fog_shader);
 
 	params_ubo = p_rd->uniform_buffer_create(PARAMS_FLOAT_COUNT * sizeof(float));
@@ -110,7 +113,7 @@ bool EdenAtmospherePostEffect::_ensure_pipelines(RenderingDevice *p_rd) {
 	linear_sampler = p_rd->sampler_create(linear);
 	nearest_sampler = p_rd->sampler_create(RenderingDevice::SamplerState());
 
-	pipelines_failed = !(rays_pipeline.is_valid() && fog_pipeline.is_valid() && params_ubo.is_valid());
+	pipelines_failed = !(rays_pipeline.is_valid() && emission_pipeline.is_valid() && fog_pipeline.is_valid() && params_ubo.is_valid());
 	return !pipelines_failed;
 }
 
@@ -210,6 +213,11 @@ void EdenAtmospherePostEffect::_render(int p_callback_type, const RenderData *p_
 				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT,
 				RenderingDevice::TEXTURE_SAMPLES_1, half);
 	}
+	if (!buffers->has_texture(SNAME(CONTEXT_NAME), SNAME(EMISSION_TEXTURE))) {
+		buffers->create_texture(SNAME(CONTEXT_NAME), SNAME(EMISSION_TEXTURE), RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT,
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT,
+				RenderingDevice::TEXTURE_SAMPLES_1, half);
+	}
 
 	const Projection proj = scene->get_cam_projection();
 	const Transform3D cam = scene->get_cam_transform();
@@ -238,7 +246,10 @@ void EdenAtmospherePostEffect::_render(int p_callback_type, const RenderData *p_
 	put_vec3w(data, i, fp.sun_ray_tint, 0.0f);
 	put_vec4(data, i, moon_uv.x, moon_uv.y, moon_w, fp.moon_ray_threshold);
 	put_vec3w(data, i, fp.moon_ray_tint, 0.0f);
-	put_vec4(data, i, (float)CLAMP(fp.ray_samples, 1, 128), fp.ray_density, fp.ray_decay, fp.ray_radius);
+	// Floor of 1 only -- no ceiling. The rays shader's march is a dynamic loop, so a high count
+	// costs GPU time and nothing else; silently capping it made the slider stop doing anything
+	// past 128 with no indication why.
+	put_vec4(data, i, (float)MAX(fp.ray_samples, 1), fp.ray_density, fp.ray_decay, fp.ray_radius);
 	put_vec4(data, i, fp.ray_sky_boost, 0.0f, 0.0f, 0.0f);
 	ERR_FAIL_COND_MSG(i != PARAMS_FLOAT_COUNT, "EdenAtmospherePostEffect: params packing out of step with the shader block.");
 	rd->buffer_update(params_ubo, 0, PARAMS_FLOAT_COUNT * sizeof(float), data);
@@ -252,10 +263,22 @@ void EdenAtmospherePostEffect::_render(int p_callback_type, const RenderData *p_
 		const RID rays = buffers->get_texture_slice(SNAME(CONTEXT_NAME), SNAME(RAYS_TEXTURE), view, 0);
 
 		if (any_rays) {
-			RenderingDevice::Uniform u_color(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color }));
-			RenderingDevice::Uniform u_depth(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ nearest_sampler, depth }));
+			const RID emission = buffers->get_texture_slice(SNAME(CONTEXT_NAME), SNAME(EMISSION_TEXTURE), view, 0);
+			{
+				RenderingDevice::Uniform u_color(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color }));
+				RenderingDevice::Uniform u_depth(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ nearest_sampler, depth }));
+				RenderingDevice::Uniform u_emission(RenderingDevice::UNIFORM_TYPE_IMAGE, 2, emission);
+				RID set = cache->get_cache(emission_shader, 0, u_color, u_depth, u_emission, u_params);
+
+				RenderingDevice::ComputeListID list = rd->compute_list_begin();
+				rd->compute_list_bind_compute_pipeline(list, emission_pipeline);
+				rd->compute_list_bind_uniform_set(list, set, 0);
+				rd->compute_list_dispatch_threads(list, half.x, half.y, 1);
+				rd->compute_list_end();
+			}
+			RenderingDevice::Uniform u_emission(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, emission }));
 			RenderingDevice::Uniform u_rays(RenderingDevice::UNIFORM_TYPE_IMAGE, 2, rays);
-			RID set = cache->get_cache(rays_shader, 0, u_color, u_depth, u_rays, u_params);
+			RID set = cache->get_cache(rays_shader, 0, u_emission, u_rays, u_params);
 
 			RenderingDevice::ComputeListID list = rd->compute_list_begin();
 			rd->compute_list_bind_compute_pipeline(list, rays_pipeline);

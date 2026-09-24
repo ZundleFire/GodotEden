@@ -66,6 +66,7 @@ def generate(out_path):
     # `#version` to be the first line, so it must survive inlining untouched -- it does, because
     # the include only ever appears after it.
     rays = inline_includes(read("atmosphere_rays.glsl"))
+    ray_emission = inline_includes(read("atmosphere_ray_emission.glsl"))
     fog = inline_includes(read("atmosphere_fog_composite.glsl"))
 
     parts = [
@@ -84,6 +85,8 @@ def generate(out_path):
         "",
         emit("EDEN_RAYS_COMPUTE_CODE", rays),
         "",
+        emit("EDEN_RAY_EMISSION_COMPUTE_CODE", ray_emission),
+        "",
         emit("EDEN_FOG_COMPOSITE_COMPUTE_CODE", fog),
         "",
         "#endif // EDEN_ATMOSPHERE_SHADERS_GEN_H",
@@ -93,7 +96,8 @@ def generate(out_path):
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(parts))
 
-    print("wrote %s (sky %d, clouds %d, rings %d, rays %d, fog %d bytes)" % (out_path, len(sky), len(clouds), len(rings), len(rays), len(fog)))
+    print("wrote %s (sky %d, clouds %d, rings %d, rays %d, fog %d bytes)" %
+            (out_path, len(sky), len(clouds), len(rings), len(rays), len(fog)))
 
 
 # SCons action entry point (see SCsub).

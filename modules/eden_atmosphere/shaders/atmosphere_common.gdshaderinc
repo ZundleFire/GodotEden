@@ -78,6 +78,10 @@ uniform float mie_scale_height : hint_range(10.0, 2000.0) = 120.0;
 uniform vec3 rayleigh_wavelengths = vec3(680.0, 550.0, 440.0);
 
 uniform float rayleigh_strength : hint_range(0.0, 8.0) = 2.5;
+// Ozone absorption (Chappuis band). Absorbs, never scatters, and is strongest in green -- which is
+// what keeps a low sun from turning the zenith olive. Relative to Rayleigh, so 1.0 is Earth's
+// ozone-to-Rayleigh ratio; 0 restores the old Rayleigh+Mie-only sky.
+uniform float ozone_strength : hint_range(0.0, 4.0) = 1.5;
 // Mie is pulled DOWN hard. Its forward phase peaks near 51 at g=0.8 against Rayleigh's 0.12,
 // and being spectrally flat that lobe is white -- at 1.0 it buries the red Rayleigh signal
 // under glare and every sunset renders as a white smear. This keeps the aureole without it
@@ -131,7 +135,11 @@ const float MIE_EXTINCTION_FACTOR = 1.1;
 // is handled by the free per-pixel jitter in atmosphere_scatter() instead -- and the banding
 // that originally prompted all this was the hard shadow edge (see planet_shadow), not the step
 // count.
-const int VIEW_STEPS = 10; // samples along the view ray
+// Was 10; dropped for the tighter atmosphere budget this is now tuned against. Measured (bench,
+// GTX 750 Ti, whole-frame): 10->6 bought only ~0.3-0.4ms across all four poses -- real but small,
+// this loop is not the dominant sky cost. Kept at 6 since it cost nothing to keep; the bigger sky
+// lever is still unidentified.
+const int VIEW_STEPS = 6; // samples along the view ray
 const int SUN_STEPS = 4;   // samples along each shadow/transmittance ray toward the sun
 
 const float PHASE_RAYLEIGH_K = 0.0596831036; // 3 / (16*PI)
@@ -154,6 +162,46 @@ vec3 beta_rayleigh() {
 
 float beta_mie() {
 	return BETA_MIE_EARTH * (EARTH_MIE_SCALE_H / max(mie_scale_height, 1.0)) * mie_strength;
+}
+
+// Ozone. ABSORBS, never scatters, so it appears in every extinction (tau) term and in none of the
+// in-scatter sums -- that asymmetry is the whole point of modelling it separately from Rayleigh.
+//
+// Why it matters here: at a low sun the light reaching the zenith has already been reddened by its
+// long slant path, and Rayleigh then scatters it blue-first. Reddened input times blue-favouring
+// scattering lands on GREEN, which is exactly the olive zenith a Rayleigh+Mie sky shows at sunset.
+// Earth does not look like that because ozone's Chappuis band eats the middle of the spectrum --
+// note the coefficients below are strongest in green, weakest in blue. That is what leaves real
+// twilight blue-violet, and it is the only term here that can remove the green.
+//
+// The profile is a tent rather than an exponential: ozone sits in a layer aloft, it is not densest
+// at the ground. Peak and width are expressed in units of rayleigh_scale_height so they follow a
+// planet's atmosphere automatically -- at Earth's 8 km scale height these give the textbook 25 km
+// peak and 15 km half-width.
+const vec3 BETA_OZONE_EARTH = vec3(0.650e-6, 1.881e-6, 0.085e-6); // m^-1, peak of the layer
+const float OZONE_PEAK_SCALE_H = 3.125; // x rayleigh_scale_height -> 25 km on Earth
+const float OZONE_WIDTH_SCALE_H = 1.875; // x rayleigh_scale_height -> 15 km half-width on Earth
+
+vec3 beta_ozone() {
+	// Same column-preserving rescale as beta_rayleigh: compressing the layer's width by the scale
+	// height ratio would otherwise thin the column by that factor and lose the effect entirely on
+	// a small planet.
+	//
+	// Also scaled by rayleigh_strength, because on a small planet that dial is standing in for
+	// "how much air is there" -- it is what keeps a short grazing path looking like a real sunset.
+	// Ozone lives in the same column, so leaving it out made ozone 2.5x too weak against the very
+	// Rayleigh it has to counteract, and the zenith stayed olive. Keeping them proportional means
+	// ozone_strength is a pure relative dial: 1.0 is Earth's ozone-to-Rayleigh ratio whatever
+	// rayleigh_strength is set to.
+	return BETA_OZONE_EARTH * (EARTH_RAYLEIGH_SCALE_H / max(rayleigh_scale_height, 1.0))
+			* rayleigh_strength * ozone_strength;
+}
+
+// Relative ozone density at altitude h: 1 at the peak, falling linearly to 0 at +-width.
+float ozone_density(float h) {
+	float peak = OZONE_PEAK_SCALE_H * rayleigh_scale_height;
+	float width = OZONE_WIDTH_SCALE_H * max(rayleigh_scale_height, 1.0);
+	return max(0.0, 1.0 - abs(h - peak) / width);
 }
 
 float atmosphere_radius() {
@@ -286,23 +334,23 @@ float lut_cos_to_u(float c) {
 	return 0.5 + 0.5 * sign(c) * sqrt(abs(c));
 }
 
-// Accumulated (rayleigh, mie) density along the ray from p toward the sun, out to the top of
-// the atmosphere. Occlusion by the planet body is NOT handled here -- see planet_shadow().
-vec2 optical_depth_to_sun(vec3 p) {
+// Accumulated (rayleigh, mie, ozone) density along the ray from p toward the sun, out to the top
+// of the atmosphere. Occlusion by the planet body is NOT handled here -- see planet_shadow().
+vec3 optical_depth_to_sun(vec3 p) {
 	if (use_transmittance_lut) {
 		float alt01 = clamp(altitude_of(p) / max(atmosphere_height, 1.0), 0.0, 1.0);
 		float c = clamp(dot(normalize(p), sun_direction), -1.0, 1.0);
-		return texture(transmittance_lut, vec2(lut_cos_to_u(c), alt01)).rg;
+		return texture(transmittance_lut, vec2(lut_cos_to_u(c), alt01)).rgb;
 	}
 
 	vec2 atm = ray_sphere(p, sun_direction, atmosphere_radius());
 	float t_end = max(atm.y, 0.0);
 	if (t_end <= 0.0) {
-		return vec2(0.0);
+		return vec3(0.0);
 	}
 
 	float step_size = t_end / float(SUN_STEPS);
-	vec2 depth = vec2(0.0);
+	vec3 depth = vec3(0.0);
 	// Midpoint sampling: with only 4 steps this is noticeably more accurate than sampling
 	// at the segment start, which would over-weight the dense sample at p itself.
 	float t = step_size * 0.5;
@@ -310,6 +358,7 @@ vec2 optical_depth_to_sun(vec3 p) {
 		float h = max(altitude_of(p + sun_direction * t), 0.0);
 		depth.x += exp(-h / rayleigh_scale_height) * step_size;
 		depth.y += exp(-h / mie_scale_height) * step_size;
+		depth.z += ozone_density(h) * step_size;
 		t += step_size;
 	}
 	return depth;
@@ -320,8 +369,9 @@ vec2 optical_depth_to_sun(vec3 p) {
 // pale gold near the poles -- planet_atmosphere.gd mirrors it on the CPU to drive the
 // DirectionalLight3D, so the terrain lighting and the sky agree.
 vec3 sun_transmittance(vec3 p) {
-	vec2 depth = optical_depth_to_sun(p);
-	vec3 tau = beta_rayleigh() * depth.x + beta_mie() * MIE_EXTINCTION_FACTOR * depth.y;
+	vec3 depth = optical_depth_to_sun(p);
+	vec3 tau = beta_rayleigh() * depth.x + beta_mie() * MIE_EXTINCTION_FACTOR * depth.y
+			+ beta_ozone() * depth.z;
 	return exp(-tau) * planet_shadow(p);
 }
 
@@ -352,8 +402,10 @@ void atmosphere_scatter(vec3 ro, vec3 rd, float t_start, float t_end, float jitt
 	float ph_ray = phase_rayleigh(mu);
 	float ph_mie = phase_mie(mu, mie_anisotropy);
 
+	vec3 b_ozone = beta_ozone();
+
 	float step_size = (t_end - t_start) / float(VIEW_STEPS);
-	vec2 view_depth = vec2(0.0); // running optical depth from the eye to the current sample
+	vec3 view_depth = vec3(0.0); // running optical depth from the eye to the current sample
 	vec3 sum_ray = vec3(0.0);
 	vec3 sum_mie = vec3(0.0);
 
@@ -364,13 +416,16 @@ void atmosphere_scatter(vec3 ro, vec3 rd, float t_start, float t_end, float jitt
 
 		float d_ray = exp(-h / rayleigh_scale_height) * step_size;
 		float d_mie = exp(-h / mie_scale_height) * step_size;
-		view_depth += vec2(d_ray, d_mie);
+		// Ozone accumulates into the extinction below but never into sum_ray/sum_mie: it absorbs
+		// and does not scatter, so it removes light from the path without adding any to the eye.
+		view_depth += vec3(d_ray, d_mie, ozone_density(h) * step_size);
 
-		vec2 sun_depth = optical_depth_to_sun(p);
+		vec3 sun_depth = optical_depth_to_sun(p);
 
 		// Total extinction along the full path: sun -> sample -> eye.
 		vec3 tau = b_ray * (view_depth.x + sun_depth.x)
-				+ b_mie * MIE_EXTINCTION_FACTOR * (view_depth.y + sun_depth.y);
+				+ b_mie * MIE_EXTINCTION_FACTOR * (view_depth.y + sun_depth.y)
+				+ b_ozone * (view_depth.z + sun_depth.z);
 		vec3 attenuation = exp(-tau) * planet_shadow(p);
 
 		sum_ray += attenuation * d_ray;
@@ -381,7 +436,8 @@ void atmosphere_scatter(vec3 ro, vec3 rd, float t_start, float t_end, float jitt
 
 	out_inscatter = (sum_ray * b_ray * ph_ray + sum_mie * b_mie * ph_mie)
 			* sun_intensity * sun_tint;
-	out_transmittance = exp(-(b_ray * view_depth.x + b_mie * MIE_EXTINCTION_FACTOR * view_depth.y));
+	out_transmittance = exp(-(b_ray * view_depth.x + b_mie * MIE_EXTINCTION_FACTOR * view_depth.y
+			+ b_ozone * view_depth.z));
 }
 
 // Convenience wrapper: clip an arbitrary view ray to the atmosphere shell, stopping early

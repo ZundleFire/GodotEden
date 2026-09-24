@@ -18,19 +18,17 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D color_tex;
-layout(set = 0, binding = 1) uniform sampler2D depth_tex;
+// Sky-masked scene colour at this pass's resolution, from atmosphere_ray_emission.glsl
+layout(set = 0, binding = 0) uniform sampler2D emission_tex;
 layout(rgba16f, set = 0, binding = 2) uniform restrict writeonly image2D rays_image;
 
 #include "atmosphere_post_common.glsl"
 
 vec3 emission(vec2 uv, vec2 light_uv, float threshold) {
-	// Reverse-Z depth: the far plane is 0.
-	float sky = step(textureLod(depth_tex, uv, 0.0).r, 1e-6);
-	vec3 bright = max(textureLod(color_tex, uv, 0.0).rgb - vec3(threshold), vec3(0.0));
+	vec3 bright = max(textureLod(emission_tex, uv, 0.0).rgb - vec3(threshold), vec3(0.0));
 	vec2 offset = (uv - light_uv) * vec2(p.screen.z, 1.0);
 	float falloff = 1.0 - smoothstep(0.0, p.rays.w, length(offset));
-	return bright * (sky * falloff);
+	return bright * falloff;
 }
 
 vec3 march(vec2 uv, vec4 light_uv, vec4 light_col, float jitter) {

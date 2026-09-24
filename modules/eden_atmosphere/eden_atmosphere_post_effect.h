@@ -80,13 +80,15 @@ private:
 	void _render(int p_callback_type, const RenderData *p_render_data);
 	bool _ensure_pipelines(RenderingDevice *p_rd);
 	RID _compile(RenderingDevice *p_rd, const char *p_source, const String &p_name);
-	static void _free_rids(RID p_rays_shader, RID p_fog_shader, RID p_ubo, RID p_linear, RID p_nearest);
+	static void _free_rids(RID p_rays_shader, RID p_emission_shader, RID p_fog_shader, RID p_ubo, RID p_linear, RID p_nearest);
 
 	Mutex params_mutex;
 	FrameParams pending;
 
 	RID rays_shader;
 	RID rays_pipeline;
+	RID emission_shader;
+	RID emission_pipeline;
 	RID fog_shader;
 	RID fog_pipeline;
 	RID params_ubo;

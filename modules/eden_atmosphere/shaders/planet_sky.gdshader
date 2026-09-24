@@ -1,4 +1,6 @@
 shader_type sky;
+// The scattering march runs in a half-resolution pass; see the AT_HALF_RES_PASS notes in sky().
+render_mode use_half_res_pass;
 
 // Planetary atmosphere sky. Renders Rayleigh + Mie single scattering from wherever the
 // camera actually is, so the sky gradient, horizon reddening and sun colour all fall out of
@@ -109,6 +111,9 @@ uniform float star_color_variation : hint_range(0.0, 1.0) = 0.3;
 // Scintillation amount and rate. 0 disables it.
 uniform float star_twinkle : hint_range(0.0, 1.0) = 0.0;
 uniform float star_twinkle_speed : hint_range(0.0, 20.0) = 3.0;
+// Clock for the twinkle, advanced by whoever turns it on. Not TIME: any use of TIME makes Godot re-render the
+// sky's whole radiance cubemap every frame (0.55 ms at 1080p on a GTX 750 Ti), with twinkle on or not.
+uniform float star_twinkle_time = 0.0;
 // Mixed into the star hash, so a different seed gives a completely different (but repeatable)
 // field instead of reshuffling it randomly every launch.
 uniform float random_seed = 0.0;
@@ -261,7 +266,12 @@ uniform float parent_planet_atmosphere_intensity : hint_range(0.0, 4.0) = 1.0;
 // Mixed into the noise hash: a different seed gives a different (but repeatable) planet.
 uniform float parent_planet_seed = 0.0;
 // Accumulated rotation phase, advanced by EdenPlanetAtmosphere's parent_planet_band_speed.
-uniform float parent_planet_band_time = 0.0;
+// Band phase, in the single texel: a per-frame uniform would re-render the whole radiance cubemap every frame (see
+// EdenParentPlanet::band_phase_texture)
+uniform sampler2D parent_planet_band_time_tex : filter_nearest, hint_default_black;
+float pp_band_time() {
+	return texelFetch(parent_planet_band_time_tex, ivec2(0), 0).r;
+}
 
 // ---------------------------------------------------------------------------------------
 // Glow and halos
@@ -360,7 +370,7 @@ vec3 star_field(vec3 rd, float sun_proximity, float moon_proximity) {
 	float brightness = 1.0 - star_brightness_variation * hash31(cell + 59.0);
 	if (star_twinkle > 0.0) {
 		float phase = hash31(cell + 71.0) * 6.2832;
-		brightness *= 1.0 - star_twinkle * (0.5 + 0.5 * sin(TIME * star_twinkle_speed * (0.6 + hash31(cell + 83.0)) + phase));
+		brightness *= 1.0 - star_twinkle * (0.5 + 0.5 * sin(star_twinkle_time * star_twinkle_speed * (0.6 + hash31(cell + 83.0)) + phase));
 	}
 	// Blackbody-ish tint: blue-white through white to orange.
 	float temperature = hash31(cell + 97.0) * 2.0 - 1.0;
@@ -472,7 +482,7 @@ float pp_clouds(vec2 l, float z, mat3 rot) {
 	if (parent_planet_cloud_cover <= 0.0) {
 		return 0.0;
 	}
-	mat3 cloud_rot = pp_rotation(parent_planet_band_time * parent_planet_cloud_rotation) * rot;
+	mat3 cloud_rot = pp_rotation(pp_band_time() * parent_planet_cloud_rotation) * rot;
 	float n = pp_seamless_noise(l, z, PP_NOISE_PERIOD, cloud_rot, parent_planet_cloud_cells);
 	float detail = pp_seamless_noise(l, z, PP_NOISE_PERIOD, cloud_rot, parent_planet_cloud_detail_cells);
 	n = clamp(n + (detail - 0.5) * parent_planet_cloud_detail_strength, 0.0, 1.0);
@@ -501,255 +511,287 @@ void sky() {
 		// no longer needed. Left interleaved_gradient_noise() in atmosphere_common.gdshaderinc
 		// for anything that still wants real dither (e.g. clouds' cloud_jitter).
 		float jitter = 0.5;
-		atmosphere_scatter(ro, rd, t_start, t_end, jitter, inscatter, transmittance);
-	}
-
-	// Moon geometry, computed HERE rather than inside the `!hit_ground` branch below. Its texture
-	// lookup needs screen-space derivatives, and derivatives are undefined inside control flow
-	// that varies per pixel -- down there they would pick garbage mip levels at the disc edge.
-	// AT_CUBEMAP_PASS is constant for the whole pass, so gating on it is safe.
-	vec2 moon_l = vec2(0.0);
-	float moon_z = 0.0;
-	vec3 moon_n = vec3(0.0);
-	float moon_coverage = 0.0;
-	vec2 moon_uv = vec2(0.0);
-	vec2 moon_uv_dx = vec2(0.0);
-	vec2 moon_uv_dy = vec2(0.0);
-	vec2 moonb_l = vec2(0.0);
-	float moonb_z = 0.0;
-	vec3 moonb_n = vec3(0.0);
-	float moonb_coverage = 0.0;
-	vec2 moonb_uv = vec2(0.0);
-	vec2 moonb_uv_dx = vec2(0.0);
-	vec2 moonb_uv_dy = vec2(0.0);
-	if (!AT_CUBEMAP_PASS) {
-		moon_geometry(rd, moon_l, moon_z, moon_n, moon_coverage, moon_uv);
-		moon_uv_dx = dFdx(moon_uv);
-		moon_uv_dy = dFdy(moon_uv);
-		// Equirect mode wraps u on the far side; keep a wrap from reading as a huge derivative.
-		moon_uv_dx.x -= round(moon_uv_dx.x);
-		moon_uv_dy.x -= round(moon_uv_dy.x);
-
-		if (moonb_enabled) {
-			moon_geometry_generic(rd, moonb_direction, moonb_orbit_normal, moonb_angular_radius,
-					moonb_texture_rotation, moonb_texture_equirect, moonb_l, moonb_z, moonb_n, moonb_coverage, moonb_uv);
-			moonb_uv_dx = dFdx(moonb_uv);
-			moonb_uv_dy = dFdy(moonb_uv);
-			moonb_uv_dx.x -= round(moonb_uv_dx.x);
-			moonb_uv_dy.x -= round(moonb_uv_dy.x);
+		// The scattering march is the sky's dominant per-pixel cost and its result is smooth, so on
+		// screen it runs at half resolution (AT_HALF_RES_PASS, below). The full-resolution pass then
+		// only reads it back; transmittance for rays that reach space comes from the LUT exactly
+		// (it stores optical depth by altitude and view angle, direction-agnostic), so the sun disc
+		// and moons still redden at full sharpness. Rays that end on the analytic ground take the
+		// half-res value -- that ground only shows where no terrain/ocean mesh covers the planet.
+		// The radiance cubemap and the no-LUT fallback march at full resolution as before.
+		if (AT_HALF_RES_PASS || AT_CUBEMAP_PASS || !use_transmittance_lut) {
+			atmosphere_scatter(ro, rd, t_start, t_end, jitter, inscatter, transmittance);
+		} else {
+			inscatter = HALF_RES_COLOR.rgb;
+			if (hit_ground) {
+				transmittance = vec3(HALF_RES_COLOR.a);
+			} else {
+				vec3 p0 = ro + rd * t_start;
+				float alt01 = clamp(altitude_of(p0) / max(atmosphere_height, 1.0), 0.0, 1.0);
+				float c = clamp(dot(normalize(p0), rd), -1.0, 1.0);
+				vec2 depth = texture(transmittance_lut, vec2(lut_cos_to_u(c), alt01)).rg;
+				transmittance = exp(-(beta_rayleigh() * depth.x + beta_mie() * MIE_EXTINCTION_FACTOR * depth.y));
+			}
 		}
 	}
 
-	vec2 parent_l = vec2(0.0);
-	float parent_z = 0.0;
-	vec3 parent_n = vec3(0.0);
-	float parent_coverage = 0.0;
-	vec2 parent_uv = vec2(0.0);
-	vec2 parent_uv_dx = vec2(0.0);
-	vec2 parent_uv_dy = vec2(0.0);
-	if (!AT_CUBEMAP_PASS && parent_planet_enabled) {
-		moon_geometry_generic(rd, normalize(parent_planet_direction), parent_planet_up, parent_planet_angular_radius,
-				parent_planet_texture_rotation, true, parent_l, parent_z, parent_n, parent_coverage, parent_uv);
-		parent_uv_dx = dFdx(parent_uv);
-		parent_uv_dy = dFdy(parent_uv);
-		parent_uv_dx.x -= round(parent_uv_dx.x);
-		parent_uv_dy.x -= round(parent_uv_dy.x);
-	}
-
-	// Whatever sits behind the atmosphere shell along this ray.
-	vec3 background;
-	if (hit_ground) {
-		vec3 surface = ro + rd * t_end;
-		vec3 n = normalize(surface);
-		float ndl = max(dot(n, sun_direction), 0.0);
-		background = ground_albedo * ndl * sun_transmittance(surface) * sun_intensity * ground_light_scale;
+	if (AT_HALF_RES_PASS) {
+		// Half-res pass: just the march. ALPHA carries transmittance as luminance (see above).
+		COLOR = inscatter;
+		ALPHA = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));
 	} else {
-		background = space_color;
 
-		// Drives both the panorama fade below and the star fade further down -- computed once
-		// here since inscatter is already available regardless of AT_CUBEMAP_PASS.
-		float sky_luminance = dot(inscatter, vec3(0.2126, 0.7152, 0.0722));
-		// 1 well inside the atmosphere, fading to 0 above it -- ice-crystal halos have nothing to
-		// refract through once the camera leaves the air.
-		float in_atmosphere_factor = 1.0 - smoothstep(0.3, 1.0, altitude_of(ro) / max(atmosphere_height, 1.0));
-
-		// The cubemap pass feeds ambient light. Skipping the sun disc there keeps a single
-		// very bright texel from blowing out the whole ambient term; the scattering integral
-		// already carries the sun's contribution to ambient.
-		// Deep space. Included in the cubemap pass, unlike the sun disc and the procedural
-		// stars: a bright nebula is a broad, low-frequency source that genuinely should tint
-		// ambient light at night, and it cannot blow out a single texel the way the disc can.
-		// Both slots fade with sky_luminance for the same reason the stars do below: without it
-		// a photographed panorama reads as a wash of colour over the daylit sky.
-		if (space_panorama_enabled || space_overlay_enabled) {
-			vec3 space = vec3(0.0);
-			if (space_panorama_enabled) {
-				// Rotating the sampling direction by the negative angle makes the sky itself
-				// appear to rotate the positive way, i.e. with the sun.
-				vec3 sky_dir = rotate_about(rd, normalize(space_rotation_axis), -space_rotation_angle);
-				float fade = 1.0 / (1.0 + sky_luminance * space_daylight_fade);
-				space += sample_panorama(space_panorama, sky_dir) * space_intensity * fade;
-			}
-			if (space_overlay_enabled) {
-				vec3 overlay_dir = rotate_about(rd, normalize(space_rotation_axis), -space_overlay_rotation_angle);
-				float overlay_fade = 1.0 / (1.0 + sky_luminance * space_overlay_daylight_fade);
-				space += sample_panorama(space_overlay, overlay_dir) * space_overlay_intensity * overlay_fade;
-			}
-			space = max(space - space_black_point, vec3(0.0));
-			space = pow(space, vec3(space_gamma));
-			space = 0.18 * pow(space / 0.18, vec3(space_contrast));
-			space = max(mix(vec3(dot(space, vec3(0.2126, 0.7152, 0.0722))), space, space_saturation), vec3(0.0));
-			background += space * space_tint * space_opacity;
-		}
-
+		// Moon geometry, computed HERE rather than inside the `!hit_ground` branch below. Its texture
+		// lookup needs screen-space derivatives, and derivatives are undefined inside control flow
+		// that varies per pixel -- down there they would pick garbage mip levels at the disc edge.
+		// AT_CUBEMAP_PASS is constant for the whole pass, so gating on it is safe.
+		vec2 moon_l = vec2(0.0);
+		float moon_z = 0.0;
+		vec3 moon_n = vec3(0.0);
+		float moon_coverage = 0.0;
+		vec2 moon_uv = vec2(0.0);
+		vec2 moon_uv_dx = vec2(0.0);
+		vec2 moon_uv_dy = vec2(0.0);
+		vec2 moonb_l = vec2(0.0);
+		float moonb_z = 0.0;
+		vec3 moonb_n = vec3(0.0);
+		float moonb_coverage = 0.0;
+		vec2 moonb_uv = vec2(0.0);
+		vec2 moonb_uv_dx = vec2(0.0);
+		vec2 moonb_uv_dy = vec2(0.0);
 		if (!AT_CUBEMAP_PASS) {
-			float star_fade = 1.0 / (1.0 + sky_luminance * star_daylight_fade);
-			float mu = clamp(dot(rd, sun_direction), -1.0, 1.0);
-			float angle = acos(mu);
-			// Suppressed within a few glow-radii of either disc: real stars vanish long before a
-			// point that close to the sun or moon would, and it hides the lattice's own periodicity
-			// from showing through the corona as a grid of unsuppressed sprites.
-			float sun_proximity = smoothstep(sun_glow_size * 1.5, sun_glow_size * 6.0, angle);
-			float moon_angle_for_stars = acos(clamp(dot(rd, moon_direction), -1.0, 1.0));
-			float moon_proximity = smoothstep(moon_glow_size * 1.5, moon_glow_size * 6.0, moon_angle_for_stars);
-			background += star_field(rd, sun_proximity, moon_proximity) * star_intensity * star_fade;
-			float disc_aa = max(fwidth(angle), sun_angular_radius * 0.02);
-			float disc = 1.0 - smoothstep(sun_angular_radius - disc_aa, sun_angular_radius + disc_aa, angle);
-			if (disc > 0.0) {
-				// Limb darkening: normalised radius across the disc, dimmed toward the rim.
-				float r = clamp(angle / max(sun_angular_radius, 1e-5), 0.0, 1.0);
-				float limb = pow(max(1.0 - r * r, 0.0), sun_limb_darkening * 0.5);
-				background += disc * limb * sun_tint * sun_intensity * sun_disc_brightness;
-			}
+			moon_geometry(rd, moon_l, moon_z, moon_n, moon_coverage, moon_uv);
+			moon_uv_dx = dFdx(moon_uv);
+			moon_uv_dy = dFdy(moon_uv);
+			// Equirect mode wraps u on the far side; keep a wrap from reading as a huge derivative.
+			moon_uv_dx.x -= round(moon_uv_dx.x);
+			moon_uv_dy.x -= round(moon_uv_dy.x);
 
-			// Sun glow, corona and halo. In `background`, so they are extinguished and reddened
-			// along the view ray exactly like the disc. Scaled by the planet's shadow so a sun below
-			// the horizon cannot shine a glow up through the ground.
-			float sun_vis = planet_shadow(ro);
-			float sun_glow = exp(-angle / max(sun_glow_size, 1e-4)) * sun_glow_intensity;
-			float corona = exp(-max(angle - sun_angular_radius, 0.0) / max(sun_angular_radius * 0.75, 1e-5)) * sun_corona_intensity;
-			background += sun_tint * ((sun_glow + corona) * sun_vis);
-			if (sun_halo_intensity > 0.0) {
-				background += halo_ring(angle) * (sun_halo_intensity * sun_vis * in_atmosphere_factor);
-			}
-
-			// Sun 2: a second, independently coloured sun near the primary one. Same disc/glow/corona
-			// treatment, entirely additive, in its own tint. Does not add a second scattering term to
-			// the sky itself (see sun2_affects_scattering on the atmosphere node) -- this alone already
-			// gives a real binary-star look for a fraction of the cost.
-			if (sun2_enabled) {
-				float angle2 = acos(clamp(dot(rd, sun2_direction), -1.0, 1.0));
-				float disc2_aa = max(fwidth(angle2), sun2_angular_radius * 0.02);
-				float disc2 = 1.0 - smoothstep(sun2_angular_radius - disc2_aa, sun2_angular_radius + disc2_aa, angle2);
-				if (disc2 > 0.0) {
-					float r2 = clamp(angle2 / max(sun2_angular_radius, 1e-5), 0.0, 1.0);
-					float limb2 = pow(max(1.0 - r2 * r2, 0.0), sun_limb_darkening * 0.5);
-					background += disc2 * limb2 * sun2_tint * sun2_disc_brightness;
-				}
-				float sun2_vis = planet_shadow_dir(ro, sun2_direction);
-				float sun2_glow = exp(-angle2 / max(sun2_glow_size, 1e-4)) * sun2_glow_intensity;
-				float corona2 = exp(-max(angle2 - sun2_angular_radius, 0.0) / max(sun2_angular_radius * 0.75, 1e-5)) * sun2_corona_intensity;
-				background += sun2_tint * ((sun2_glow + corona2) * sun2_vis);
-			}
-
-			// Moon. Shaded as a lit sphere against the real sun direction, so the phase -- crescent,
-			// quarter, gibbous, full -- falls out of the lighting instead of needing phase textures,
-			// and it is always consistent with where the sun actually is.
-			if (moon_coverage > 0.0) {
-				vec3 albedo = textureGrad(moon_texture, moon_uv, moon_uv_dx, moon_uv_dy).rgb;
-				albedo = max((albedo - 0.5) * moon_contrast + 0.5, vec3(0.0));
-				albedo = max(mix(vec3(dot(albedo, vec3(0.2126, 0.7152, 0.0722))), albedo, moon_saturation), vec3(0.0));
-				float mu0 = max(dot(moon_n, sun_direction), 0.0);
-				// Lommel-Seeliger rather than Lambert. Real regolith back-scatters, which is why a
-				// full moon looks like a flat, evenly bright disc instead of a shaded ball. Lambert
-				// would darken the full moon toward its limb like a billiard ball.
-				float moon_reflect = min(2.0 * mu0 / max(mu0 + moon_z, 1e-4), 1.5);
-				float limb = pow(max(moon_z, 1e-4), moon_limb_darkening);
-				// Outside the atmosphere, so lit by raw sunlight, not by sun_transmittance().
-				vec3 incident = sun_tint * moon_reflect + vec3(moon_earthshine);
-				float moon_fade = 1.0 / (1.0 + sky_luminance * moon_daylight_fade);
-				vec3 moon_col = albedo * moon_tint * incident * limb * moon_intensity * moon_disc_brightness * moon_fade;
-				// mix, not add: the moon is opaque and hides the stars, panorama and even the sun disc
-				// behind it. Its dark side therefore shows black here and becomes plain sky once the
-				// inscatter is added on top -- exactly how the daytime moon looks.
-				background = mix(background, moon_col, moon_coverage * moon_opacity);
-			}
-
-			// Moon glow and halo. Scaled by phase -- a new moon has neither -- and by the same daylight
-			// fade as the disc.
-			if (moon_glow_intensity > 0.0 || moon_halo_intensity > 0.0) {
-				float moon_angle = acos(clamp(dot(rd, moon_direction), -1.0, 1.0));
-				float moon_vis = planet_shadow_dir(ro, moon_direction) * moon_phase_brightness
-						/ (1.0 + sky_luminance * moon_daylight_fade);
-				float moon_glow = exp(-moon_angle / max(moon_glow_size, 1e-4)) * moon_glow_intensity;
-				background += moon_tint * (moon_glow * moon_vis);
-				background += halo_ring(moon_angle) * (moon_halo_intensity * moon_vis * in_atmosphere_factor);
-			}
-
-			// Moon B: a second moon, on its own orbit. Same shading model as the primary moon.
 			if (moonb_enabled) {
-				if (moonb_coverage > 0.0) {
-					vec3 albedo = textureGrad(moonb_texture, moonb_uv, moonb_uv_dx, moonb_uv_dy).rgb;
-					albedo = max((albedo - 0.5) * moonb_contrast + 0.5, vec3(0.0));
-					albedo = max(mix(vec3(dot(albedo, vec3(0.2126, 0.7152, 0.0722))), albedo, moonb_saturation), vec3(0.0));
-					float mu0b = max(dot(moonb_n, sun_direction), 0.0);
-					float moonb_reflect = min(2.0 * mu0b / max(mu0b + moonb_z, 1e-4), 1.5);
-					float limbb = pow(max(moonb_z, 1e-4), moonb_limb_darkening);
-					vec3 incidentb = sun_tint * moonb_reflect + vec3(moonb_earthshine);
-					float moonb_fade = 1.0 / (1.0 + sky_luminance * moonb_daylight_fade);
-					vec3 moonb_col = albedo * moonb_tint * incidentb * limbb * moonb_intensity * moonb_disc_brightness * moonb_fade;
-					background = mix(background, moonb_col, moonb_coverage * moonb_opacity);
-				}
-				if (moonb_glow_intensity > 0.0 || moonb_halo_intensity > 0.0) {
-					float moonb_angle = acos(clamp(dot(rd, moonb_direction), -1.0, 1.0));
-					float moonb_vis = planet_shadow_dir(ro, moonb_direction) * moonb_phase_brightness
-							/ (1.0 + sky_luminance * moonb_daylight_fade);
-					float moonb_glow = exp(-moonb_angle / max(moonb_glow_size, 1e-4)) * moonb_glow_intensity;
-					background += moonb_tint * (moonb_glow * moonb_vis);
-					background += halo_ring(moonb_angle) * (moonb_halo_intensity * moonb_vis * in_atmosphere_factor);
-				}
-			}
-
-			// Parent planet: a large body fixed in the sky. Same real lit-sphere phase as the moons,
-			// with either its own texture or the pixel-art procedural surface above.
-			if (parent_planet_enabled && parent_coverage > 0.0) {
-				vec3 col;
-				float ndl = max(dot(parent_n, sun_direction), 0.0);
-				if (parent_planet_texture_enabled) {
-					col = textureGrad(parent_planet_texture, parent_uv, parent_uv_dx, parent_uv_dy).rgb;
-				} else {
-					vec2 pl;
-					float pz;
-					pp_pixel_snap(parent_l, parent_z, pl, pz);
-					mat3 rot = pp_rotation(parent_planet_rotation + parent_planet_band_time);
-					vec3 terrain = pp_surface(pl, pz, rot);
-					float cloud = pp_clouds(pl, pz, rot);
-					// Drop shadow: darken the terrain wherever cloud sits over it, same as the source
-					// shader's separate shadow pass, before the (fully opaque) cloud colour goes on top.
-					terrain *= 1.0 - cloud * parent_planet_cloud_shadow;
-					col = mix(terrain, parent_planet_cloud_color, cloud);
-				}
-				float parent_reflect = min(2.0 * ndl / max(ndl + parent_z, 1e-4), 1.5);
-				float light = parent_planet_shade_bands > 1
-						? floor(parent_reflect * float(parent_planet_shade_bands) + 0.5) / float(parent_planet_shade_bands)
-						: parent_reflect;
-				float limbp = pow(max(parent_z, 1e-4), parent_planet_limb_darkening);
-				vec3 incidentp = sun_tint * light + vec3(parent_planet_earthshine);
-				vec3 parent_col = col * incidentp * limbp * parent_planet_brightness;
-				// Thin atmosphere rim at the limb, brightest grazing the silhouette -- the blue edge
-				// glow that reads as "this has air" even in a stylised render.
-				float rim = pow(1.0 - parent_z, parent_planet_atmosphere_power) * parent_planet_atmosphere_intensity;
-				parent_col += parent_planet_atmosphere_color * (rim * max(light, 0.15));
-				background = mix(background, parent_col, parent_coverage);
-			}
-			if (parent_planet_enabled && parent_planet_glow_intensity > 0.0) {
-				float parent_angle = acos(clamp(dot(rd, normalize(parent_planet_direction)), -1.0, 1.0));
-				float parent_vis = planet_shadow_dir(ro, normalize(parent_planet_direction)) / (1.0 + sky_luminance * 50.0);
-				float parent_glow = exp(-parent_angle / max(parent_planet_glow_size, 1e-4)) * parent_planet_glow_intensity;
-				background += parent_planet_atmosphere_color * (parent_glow * parent_vis);
+				moon_geometry_generic(rd, moonb_direction, moonb_orbit_normal, moonb_angular_radius,
+						moonb_texture_rotation, moonb_texture_equirect, moonb_l, moonb_z, moonb_n, moonb_coverage, moonb_uv);
+				moonb_uv_dx = dFdx(moonb_uv);
+				moonb_uv_dy = dFdy(moonb_uv);
+				moonb_uv_dx.x -= round(moonb_uv_dx.x);
+				moonb_uv_dy.x -= round(moonb_uv_dy.x);
 			}
 		}
-	}
 
-	COLOR = (background * transmittance + inscatter) * exposure;
+		vec2 parent_l = vec2(0.0);
+		float parent_z = 0.0;
+		vec3 parent_n = vec3(0.0);
+		float parent_coverage = 0.0;
+		vec2 parent_uv = vec2(0.0);
+		vec2 parent_uv_dx = vec2(0.0);
+		vec2 parent_uv_dy = vec2(0.0);
+		if (!AT_CUBEMAP_PASS && parent_planet_enabled) {
+			moon_geometry_generic(rd, normalize(parent_planet_direction), parent_planet_up, parent_planet_angular_radius,
+					parent_planet_texture_rotation, true, parent_l, parent_z, parent_n, parent_coverage, parent_uv);
+			parent_uv_dx = dFdx(parent_uv);
+			parent_uv_dy = dFdy(parent_uv);
+			parent_uv_dx.x -= round(parent_uv_dx.x);
+			parent_uv_dy.x -= round(parent_uv_dy.x);
+		}
+
+		// Whatever sits behind the atmosphere shell along this ray.
+		vec3 background;
+		if (hit_ground) {
+			vec3 surface = ro + rd * t_end;
+			vec3 n = normalize(surface);
+			float ndl = max(dot(n, sun_direction), 0.0);
+			background = ground_albedo * ndl * sun_transmittance(surface) * sun_intensity * ground_light_scale;
+		} else {
+			background = space_color;
+
+			// Drives both the panorama fade below and the star fade further down -- computed once
+			// here since inscatter is already available regardless of AT_CUBEMAP_PASS.
+			float sky_luminance = dot(inscatter, vec3(0.2126, 0.7152, 0.0722));
+			// 1 well inside the atmosphere, fading to 0 above it -- ice-crystal halos have nothing to
+			// refract through once the camera leaves the air.
+			float in_atmosphere_factor = 1.0 - smoothstep(0.3, 1.0, altitude_of(ro) / max(atmosphere_height, 1.0));
+
+			// The cubemap pass feeds ambient light. Skipping the sun disc there keeps a single
+			// very bright texel from blowing out the whole ambient term; the scattering integral
+			// already carries the sun's contribution to ambient.
+			// Deep space. Included in the cubemap pass, unlike the sun disc and the procedural
+			// stars: a bright nebula is a broad, low-frequency source that genuinely should tint
+			// ambient light at night, and it cannot blow out a single texel the way the disc can.
+			// Both slots fade with sky_luminance for the same reason the stars do below: without it
+			// a photographed panorama reads as a wash of colour over the daylit sky.
+			if (space_panorama_enabled || space_overlay_enabled) {
+				vec3 space = vec3(0.0);
+				if (space_panorama_enabled) {
+					// Rotating the sampling direction by the negative angle makes the sky itself
+					// appear to rotate the positive way, i.e. with the sun.
+					vec3 sky_dir = rotate_about(rd, normalize(space_rotation_axis), -space_rotation_angle);
+					float fade = 1.0 / (1.0 + sky_luminance * space_daylight_fade);
+					space += sample_panorama(space_panorama, sky_dir) * space_intensity * fade;
+				}
+				if (space_overlay_enabled) {
+					vec3 overlay_dir = rotate_about(rd, normalize(space_rotation_axis), -space_overlay_rotation_angle);
+					float overlay_fade = 1.0 / (1.0 + sky_luminance * space_overlay_daylight_fade);
+					space += sample_panorama(space_overlay, overlay_dir) * space_overlay_intensity * overlay_fade;
+				}
+				space = max(space - space_black_point, vec3(0.0));
+				space = pow(space, vec3(space_gamma));
+				space = 0.18 * pow(space / 0.18, vec3(space_contrast));
+				space = max(mix(vec3(dot(space, vec3(0.2126, 0.7152, 0.0722))), space, space_saturation), vec3(0.0));
+				background += space * space_tint * space_opacity;
+			}
+
+			if (!AT_CUBEMAP_PASS) {
+				float star_fade = 1.0 / (1.0 + sky_luminance * star_daylight_fade);
+				float mu = clamp(dot(rd, sun_direction), -1.0, 1.0);
+				float angle = acos(mu);
+				// Suppressed within a few glow-radii of either disc: real stars vanish long before a
+				// point that close to the sun or moon would, and it hides the lattice's own periodicity
+				// from showing through the corona as a grid of unsuppressed sprites.
+				float sun_proximity = smoothstep(sun_glow_size * 1.5, sun_glow_size * 6.0, angle);
+				float moon_angle_for_stars = acos(clamp(dot(rd, moon_direction), -1.0, 1.0));
+				float moon_proximity = smoothstep(moon_glow_size * 1.5, moon_glow_size * 6.0, moon_angle_for_stars);
+				// ~0.5 ms at 1080p on a GTX 750 Ti, so skipped when off, and also wherever the daylight fade has
+				// taken the stars under 1/512 of the sky behind them (star_field peaks at 1): below one 8-bit step,
+				// which is all of a daytime sky. star_field takes no derivatives, so the per-pixel branch is safe.
+				if (star_intensity > 0.0 && star_intensity * star_fade * 512.0 > sky_luminance) {
+					background += star_field(rd, sun_proximity, moon_proximity) * star_intensity * star_fade;
+				}
+				float disc_aa = max(fwidth(angle), sun_angular_radius * 0.02);
+				float disc = 1.0 - smoothstep(sun_angular_radius - disc_aa, sun_angular_radius + disc_aa, angle);
+				if (disc > 0.0) {
+					// Limb darkening: normalised radius across the disc, dimmed toward the rim.
+					float r = clamp(angle / max(sun_angular_radius, 1e-5), 0.0, 1.0);
+					float limb = pow(max(1.0 - r * r, 0.0), sun_limb_darkening * 0.5);
+					background += disc * limb * sun_tint * sun_intensity * sun_disc_brightness;
+				}
+
+				// Sun glow, corona and halo. In `background`, so they are extinguished and reddened
+				// along the view ray exactly like the disc. Scaled by the planet's shadow so a sun below
+				// the horizon cannot shine a glow up through the ground.
+				float sun_vis = planet_shadow(ro);
+				float sun_glow = exp(-angle / max(sun_glow_size, 1e-4)) * sun_glow_intensity;
+				float corona = exp(-max(angle - sun_angular_radius, 0.0) / max(sun_angular_radius * 0.75, 1e-5)) * sun_corona_intensity;
+				background += sun_tint * ((sun_glow + corona) * sun_vis);
+				if (sun_halo_intensity > 0.0) {
+					background += halo_ring(angle) * (sun_halo_intensity * sun_vis * in_atmosphere_factor);
+				}
+
+				// Sun 2: a second, independently coloured sun near the primary one. Same disc/glow/corona
+				// treatment, entirely additive, in its own tint. Does not add a second scattering term to
+				// the sky itself (see sun2_affects_scattering on the atmosphere node) -- this alone already
+				// gives a real binary-star look for a fraction of the cost.
+				if (sun2_enabled) {
+					float angle2 = acos(clamp(dot(rd, sun2_direction), -1.0, 1.0));
+					float disc2_aa = max(fwidth(angle2), sun2_angular_radius * 0.02);
+					float disc2 = 1.0 - smoothstep(sun2_angular_radius - disc2_aa, sun2_angular_radius + disc2_aa, angle2);
+					if (disc2 > 0.0) {
+						float r2 = clamp(angle2 / max(sun2_angular_radius, 1e-5), 0.0, 1.0);
+						float limb2 = pow(max(1.0 - r2 * r2, 0.0), sun_limb_darkening * 0.5);
+						background += disc2 * limb2 * sun2_tint * sun2_disc_brightness;
+					}
+					float sun2_vis = planet_shadow_dir(ro, sun2_direction);
+					float sun2_glow = exp(-angle2 / max(sun2_glow_size, 1e-4)) * sun2_glow_intensity;
+					float corona2 = exp(-max(angle2 - sun2_angular_radius, 0.0) / max(sun2_angular_radius * 0.75, 1e-5)) * sun2_corona_intensity;
+					background += sun2_tint * ((sun2_glow + corona2) * sun2_vis);
+				}
+
+				// Moon. Shaded as a lit sphere against the real sun direction, so the phase -- crescent,
+				// quarter, gibbous, full -- falls out of the lighting instead of needing phase textures,
+				// and it is always consistent with where the sun actually is.
+				if (moon_coverage > 0.0) {
+					vec3 albedo = textureGrad(moon_texture, moon_uv, moon_uv_dx, moon_uv_dy).rgb;
+					albedo = max((albedo - 0.5) * moon_contrast + 0.5, vec3(0.0));
+					albedo = max(mix(vec3(dot(albedo, vec3(0.2126, 0.7152, 0.0722))), albedo, moon_saturation), vec3(0.0));
+					float mu0 = max(dot(moon_n, sun_direction), 0.0);
+					// Lommel-Seeliger rather than Lambert. Real regolith back-scatters, which is why a
+					// full moon looks like a flat, evenly bright disc instead of a shaded ball. Lambert
+					// would darken the full moon toward its limb like a billiard ball.
+					float moon_reflect = min(2.0 * mu0 / max(mu0 + moon_z, 1e-4), 1.5);
+					float limb = pow(max(moon_z, 1e-4), moon_limb_darkening);
+					// Outside the atmosphere, so lit by raw sunlight, not by sun_transmittance().
+					vec3 incident = sun_tint * moon_reflect + vec3(moon_earthshine);
+					float moon_fade = 1.0 / (1.0 + sky_luminance * moon_daylight_fade);
+					vec3 moon_col = albedo * moon_tint * incident * limb * moon_intensity * moon_disc_brightness * moon_fade;
+					// mix, not add: the moon is opaque and hides the stars, panorama and even the sun disc
+					// behind it. Its dark side therefore shows black here and becomes plain sky once the
+					// inscatter is added on top -- exactly how the daytime moon looks.
+					background = mix(background, moon_col, moon_coverage * moon_opacity);
+				}
+
+				// Moon glow and halo. Scaled by phase -- a new moon has neither -- and by the same daylight
+				// fade as the disc.
+				if (moon_glow_intensity > 0.0 || moon_halo_intensity > 0.0) {
+					float moon_angle = acos(clamp(dot(rd, moon_direction), -1.0, 1.0));
+					float moon_vis = planet_shadow_dir(ro, moon_direction) * moon_phase_brightness
+							/ (1.0 + sky_luminance * moon_daylight_fade);
+					float moon_glow = exp(-moon_angle / max(moon_glow_size, 1e-4)) * moon_glow_intensity;
+					background += moon_tint * (moon_glow * moon_vis);
+					background += halo_ring(moon_angle) * (moon_halo_intensity * moon_vis * in_atmosphere_factor);
+				}
+
+				// Moon B: a second moon, on its own orbit. Same shading model as the primary moon.
+				if (moonb_enabled) {
+					if (moonb_coverage > 0.0) {
+						vec3 albedo = textureGrad(moonb_texture, moonb_uv, moonb_uv_dx, moonb_uv_dy).rgb;
+						albedo = max((albedo - 0.5) * moonb_contrast + 0.5, vec3(0.0));
+						albedo = max(mix(vec3(dot(albedo, vec3(0.2126, 0.7152, 0.0722))), albedo, moonb_saturation), vec3(0.0));
+						float mu0b = max(dot(moonb_n, sun_direction), 0.0);
+						float moonb_reflect = min(2.0 * mu0b / max(mu0b + moonb_z, 1e-4), 1.5);
+						float limbb = pow(max(moonb_z, 1e-4), moonb_limb_darkening);
+						vec3 incidentb = sun_tint * moonb_reflect + vec3(moonb_earthshine);
+						float moonb_fade = 1.0 / (1.0 + sky_luminance * moonb_daylight_fade);
+						vec3 moonb_col = albedo * moonb_tint * incidentb * limbb * moonb_intensity * moonb_disc_brightness * moonb_fade;
+						background = mix(background, moonb_col, moonb_coverage * moonb_opacity);
+					}
+					if (moonb_glow_intensity > 0.0 || moonb_halo_intensity > 0.0) {
+						float moonb_angle = acos(clamp(dot(rd, moonb_direction), -1.0, 1.0));
+						float moonb_vis = planet_shadow_dir(ro, moonb_direction) * moonb_phase_brightness
+								/ (1.0 + sky_luminance * moonb_daylight_fade);
+						float moonb_glow = exp(-moonb_angle / max(moonb_glow_size, 1e-4)) * moonb_glow_intensity;
+						background += moonb_tint * (moonb_glow * moonb_vis);
+						background += halo_ring(moonb_angle) * (moonb_halo_intensity * moonb_vis * in_atmosphere_factor);
+					}
+				}
+
+				// Parent planet: a large body fixed in the sky. Same real lit-sphere phase as the moons,
+				// with either its own texture or the pixel-art procedural surface above.
+				if (parent_planet_enabled && parent_coverage > 0.0) {
+					vec3 col;
+					float ndl = max(dot(parent_n, sun_direction), 0.0);
+					if (parent_planet_texture_enabled) {
+						col = textureGrad(parent_planet_texture, parent_uv, parent_uv_dx, parent_uv_dy).rgb;
+					} else {
+						vec2 pl;
+						float pz;
+						pp_pixel_snap(parent_l, parent_z, pl, pz);
+						mat3 rot = pp_rotation(parent_planet_rotation + pp_band_time());
+						vec3 terrain = pp_surface(pl, pz, rot);
+						float cloud = pp_clouds(pl, pz, rot);
+						// Drop shadow: darken the terrain wherever cloud sits over it, same as the source
+						// shader's separate shadow pass, before the (fully opaque) cloud colour goes on top.
+						terrain *= 1.0 - cloud * parent_planet_cloud_shadow;
+						col = mix(terrain, parent_planet_cloud_color, cloud);
+					}
+					float parent_reflect = min(2.0 * ndl / max(ndl + parent_z, 1e-4), 1.5);
+					float light = parent_planet_shade_bands > 1
+							? floor(parent_reflect * float(parent_planet_shade_bands) + 0.5) / float(parent_planet_shade_bands)
+							: parent_reflect;
+					float limbp = pow(max(parent_z, 1e-4), parent_planet_limb_darkening);
+					vec3 incidentp = sun_tint * light + vec3(parent_planet_earthshine);
+					vec3 parent_col = col * incidentp * limbp * parent_planet_brightness;
+					// Thin atmosphere rim at the limb, brightest grazing the silhouette -- the blue edge
+					// glow that reads as "this has air" even in a stylised render.
+					float rim = pow(1.0 - parent_z, parent_planet_atmosphere_power) * parent_planet_atmosphere_intensity;
+					parent_col += parent_planet_atmosphere_color * (rim * max(light, 0.15));
+					background = mix(background, parent_col, parent_coverage);
+				}
+				if (parent_planet_enabled && parent_planet_glow_intensity > 0.0) {
+					float parent_angle = acos(clamp(dot(rd, normalize(parent_planet_direction)), -1.0, 1.0));
+					float parent_vis = planet_shadow_dir(ro, normalize(parent_planet_direction)) / (1.0 + sky_luminance * 50.0);
+					float parent_glow = exp(-parent_angle / max(parent_planet_glow_size, 1e-4)) * parent_planet_glow_intensity;
+					background += parent_planet_atmosphere_color * (parent_glow * parent_vis);
+				}
+			}
+		}
+
+		COLOR = (background * transmittance + inscatter) * exposure;
+	}
 }

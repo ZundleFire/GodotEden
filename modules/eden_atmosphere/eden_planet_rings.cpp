@@ -1,4 +1,5 @@
 #include "eden_planet_rings.h"
+#include "eden_material_util.h"
 
 #include "eden_atmosphere_shaders.gen.h"
 #include "scene/resources/surface_tool.h"
@@ -141,9 +142,9 @@ void EdenPlanetRings::_push_uniforms() {
 	if (material.is_null()) {
 		return;
 	}
-#define EDEN_RING_U_FLOAT(m_name, m_default, m_hint, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
-#define EDEN_RING_U_VEC3(m_name, m_x, m_y, m_z, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
-#define EDEN_RING_U_COLOR(m_name, m_r, m_g, m_b, m_group) material->set_shader_parameter(SNAME(#m_name), m_name);
+#define EDEN_RING_U_FLOAT(m_name, m_default, m_hint, m_group) eden_set_param(material, SNAME(#m_name), m_name);
+#define EDEN_RING_U_VEC3(m_name, m_x, m_y, m_z, m_group) eden_set_param(material, SNAME(#m_name), m_name);
+#define EDEN_RING_U_COLOR(m_name, m_r, m_g, m_b, m_group) eden_set_param(material, SNAME(#m_name), m_name);
 #define EDEN_RING_L_FLOAT(m_name, m_default, m_hint, m_group)
 #define EDEN_RING_L_VEC3(m_name, m_x, m_y, m_z, m_group)
 #define EDEN_RING_L_INT(m_name, m_default, m_hint, m_group)
@@ -157,8 +158,8 @@ void EdenPlanetRings::_push_uniforms() {
 
 	// Fallback for standalone use (no linked EdenPlanetAtmosphere); overwritten each frame once
 	// this material is linked via add_linked_material(), same as EdenCloudShell.
-	material->set_shader_parameter(SNAME("planet_radius"), planet_radius);
-	material->set_shader_parameter(SNAME("planet_center"), planet_center);
+	eden_set_param(material, SNAME("planet_radius"), planet_radius);
+	eden_set_param(material, SNAME("planet_center"), planet_center);
 }
 
 // ===========================================================================================
