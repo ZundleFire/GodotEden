@@ -1,6 +1,7 @@
 #include "eden_planet_generator_v4.h"
 
 #include "modules/voxel/storage/mixel4.h"
+#include "modules/voxel/thirdparty/fast_noise/FastNoiseLite.h"
 #include "modules/voxel/storage/voxel_buffer.h"
 #include "modules/voxel/util/noise/voxel_terrain_noise.h"
 
@@ -21,7 +22,7 @@ inline float ss(float e0, float e1, float x) {
 
 // Per-thread scratch, reused across blocks
 struct SurfaceBuffers {
-	std::vector<float> height, ridge, erosion;
+	std::vector<float> height, ridge, erosion, landform;
 	std::vector<float> radial, temperature, moisture, normalized_height, zeros;
 	std::vector<float> biome, ocean, coast, river, vegetation, desert, tundra, mountain, snow;
 
@@ -31,6 +32,7 @@ struct SurfaceBuffers {
 		erosion.resize(n);
 	}
 	void resize_climate(size_t n) {
+		landform.resize(n);
 		for (std::vector<float> *v : { &radial, &temperature, &moisture, &normalized_height, &zeros, &biome, &ocean,
 					 &coast, &river, &vegetation, &desert, &tundra, &mountain, &snow }) {
 			v->resize(n);
@@ -108,12 +110,51 @@ void compute_heights(
 
 	if (p.use_erosion) {
 		// Erosion writes its relief into a temp, then only lands on dry ground
+	// Landform regions. Noise is sampled on the planet_radius sphere: heights must depend on direction only (the
+	// lattice path in generate_on_lattice relies on it)
+	float *lf = b.landform.data();
+	if (p.landforms_enabled) {
+		fast_noise_lite::FastNoiseLite regions;
+		regions.SetSeed(p.seed + 3571);
+		regions.SetNoiseType(fast_noise_lite::FastNoiseLite::NoiseType_OpenSimplex2);
+		regions.SetFractalType(fast_noise_lite::FastNoiseLite::FractalType_FBm);
+		regions.SetFractalOctaves(3);
+		regions.SetFrequency(1.0f / MAX(p.landform_scale, 1.0f));
+		fast_noise_lite::FastNoiseLite valleys;
+		valleys.SetSeed(p.seed + 6247);
+		valleys.SetNoiseType(fast_noise_lite::FastNoiseLite::NoiseType_OpenSimplex2);
+		valleys.SetFractalType(fast_noise_lite::FastNoiseLite::FractalType_FBm);
+		valleys.SetFractalOctaves(2);
+		valleys.SetFrequency(1.0f / MAX(p.valley_scale, 1.0f));
+		// 3-octave fBm sits mostly in [-0.5, 0.5]: map coverage to a threshold in that band
+		const float threshold = Math::lerp(0.45f, -0.45f, CLAMP(p.mountain_coverage, 0.0f, 1.0f));
+		for (unsigned int i = 0; i < count; ++i) {
+			const float inv_len = p.planet_radius / MAX(Math::sqrt(x[i] * x[i] + y[i] * y[i] + z[i] * z[i]), 1e-3f);
+			const float sx = x[i] * inv_len, sy = y[i] * inv_len, sz = z[i] * inv_len;
+			// A wide band: foothills between plains and ranges. At +-0.1 ranges rose as walls straight out of the plain
+			const float m = ss(threshold - 0.25f, threshold + 0.25f, regions.GetNoise(sx, sy, sz));
+			lf[i] = m;
+			const float above_sea = h[i] - p.sea_level;
+			if (above_sea > 0.0f) {
+				// Scaling relief above sea level keeps coastlines where they were
+				h[i] = p.sea_level + above_sea * Math::lerp(p.lowland_relief, 1.0f, m);
+			}
+			// Valleys along the zero set of the valley noise: U-shaped channels, fading at the coast and in ranges
+			const float v = Math::abs(valleys.GetNoise(sx, sy, sz));
+			const float channel = 1.0f - ss(0.0f, MAX(p.valley_width, 1e-4f), v);
+			h[i] -= p.valley_depth * channel * (1.0f - m) * ss(0.0f, 60.0f, h[i] - p.sea_level);
+		}
+	} else {
+		std::fill(b.landform.begin(), b.landform.end(), 1.0f);
+	}
+
 		b.radial.resize(count);
 		planet_erosion_series(x, y, z, b.radial.data(), b.ridge.data(), b.erosion.data(), count, make_erosion_params(p));
 		for (unsigned int i = 0; i < count; ++i) {
 			const float above_sea = h[i] - p.sea_level;
-			// Continental shelf fades it out so ocean floors stay smooth; the eroded relief is where mountains come from
-			const float mask = ss(-400.0f, 100.0f, above_sea);
+			// Continental shelf fades it out so ocean floors stay smooth; the eroded relief is where mountains come from,
+			// so lowlands only get a fraction of it
+			const float mask = ss(-400.0f, 100.0f, above_sea) * Math::lerp(p.lowland_erosion, 1.0f, lf[i]);
 			h[i] += b.radial[i] * p.erosion_height_scale * mask;
 			b.ridge[i] *= mask;
 			b.erosion[i] = Math::lerp(0.5f, b.erosion[i], mask);
@@ -195,7 +236,11 @@ void compute_material_weights(const Parameters &p, const SurfaceBuffers &b, unsi
 
 	w[EdenPlanetGeneratorV4::MAT_OCEAN_FLOOR] = ocean;
 	w[EdenPlanetGeneratorV4::MAT_SNOW] = snow;
-	w[EdenPlanetGeneratorV4::MAT_SAND] = MAX(b.coast[i], b.desert[i]) * (1.0f - snow);
+	// The climate kernel's coast mask is "lowest ~10% of the normalized relief". With flattened lowlands that covered
+	// half the land in beach sand; only the metres right above the sea are coast
+	const float above_sea = b.radial[i] - p.planet_radius - p.sea_level;
+	const float coast = b.coast[i] * (1.0f - ss(3.0f, 12.0f, above_sea));
+	w[EdenPlanetGeneratorV4::MAT_SAND] = MAX(coast, b.desert[i]) * (1.0f - snow);
 	w[EdenPlanetGeneratorV4::MAT_ROCK] = rock * (1.0f - snow);
 	w[EdenPlanetGeneratorV4::MAT_DIRT] = MAX(sediment, b.tundra[i] * 0.5f) * (1.0f - snow);
 	w[EdenPlanetGeneratorV4::MAT_MOSS] = b.vegetation[i] * ss(0.62f, 0.9f, b.moisture[i]) * (1.0f - rock);
@@ -587,6 +632,14 @@ const PropDef g_prop_defs[] = {
 	V4_PROP(use_erosion, PK_BOOL, ""),
 	V4_PROP(erosion_height_scale, PK_FLOAT, "0,4,0.01"),
 	V4_PROP(erosion_tile_size, PK_FLOAT, "100,100000,1,or_greater"),
+	d["landform"] = b.landform[0]; // 0 lowland .. 1 mountain range
+	float w[MAT_COUNT];
+	compute_material_weights(p, b, 0, ridge, w);
+	int dominant = 0;
+	for (int m = 1; m < MAT_COUNT; ++m) {
+		dominant = w[m] > w[dominant] ? m : dominant;
+	}
+	d["material"] = dominant; // MAT_*
 	V4_PROP(erosion_strength, PK_FLOAT, "0,1,0.001"),
 	V4_PROP(erosion_detail, PK_FLOAT, "0.01,4,0.01"),
 	V4_PROP(erosion_octaves, PK_INT, "0,12,1"),
@@ -631,6 +684,15 @@ bool EdenPlanetGeneratorV4::_set(const StringName &p_name, const Variant &p_valu
 			case PK_BOOL:
 				*reinterpret_cast<bool *>(field) = bool(p_value);
 				break;
+	V4_GROUP("Landforms"),
+	V4_PROP(landforms_enabled, PK_BOOL, ""),
+	V4_PROP(mountain_coverage, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(landform_scale, PK_FLOAT, "100,200000,1"),
+	V4_PROP(lowland_relief, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(lowland_erosion, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(valley_depth, PK_FLOAT, "0,1000,1"),
+	V4_PROP(valley_width, PK_FLOAT, "0,0.5,0.001"),
+	V4_PROP(valley_scale, PK_FLOAT, "100,100000,1"),
 			default:
 				break;
 		}

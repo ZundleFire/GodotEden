@@ -55,7 +55,11 @@ func _initialize() -> void:
 			result["probe_" + key] = terrain.get(key)
 		if args.has("no_collisions"):
 			terrain.generate_collisions = false
-		instancers.append(terrain.get_node("EdenFoliage"))
+		var pf: Node = terrain.get_node("EdenFoliage")
+		for k in args: # --f_<export>=value overrides EdenFoliage exports before it builds
+			if k.begins_with("f_"):
+				pf.set(k.substr(2), str_to_var(args[k]))
+		instancers.append(pf)
 		_setup_view()
 		return
 

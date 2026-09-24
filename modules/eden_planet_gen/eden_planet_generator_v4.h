@@ -59,6 +59,17 @@ public:
 		float canyon_scale = 6000.0f;
 		float terrace_strength = 0.0f;
 		float terrace_count = 8.0f;
+		// Landforms: a low-frequency region mask (0 lowland .. 1 mountain range). Lowlands get their land relief and
+		// erosion scaled down (hills, fields, plains) and shallow valley channels carved in; mountain regions keep
+		// the full relief. The ridged fBm + erosion alone made ~2/3 of all land steeper than 35 degrees.
+		bool landforms_enabled = true;
+		float mountain_coverage = 0.3f; // approx. fraction of land that is mountain regions
+		float landform_scale = 9000.0f; // size of lowland / mountain regions, m
+		float lowland_relief = 0.2f; // land height multiplier in lowlands
+		float lowland_erosion = 0.1f; // eroded relief multiplier in lowlands
+		float valley_depth = 45.0f; // m
+		float valley_width = 0.07f; // 0..1, fraction of the valley noise range
+		float valley_scale = 4500.0f; // spacing of the valley network, m
 		// Erosion
 		bool use_erosion = true;
 		float erosion_height_scale = 1.5f;
