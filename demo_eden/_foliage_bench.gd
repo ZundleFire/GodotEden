@@ -59,6 +59,14 @@ func _initialize() -> void:
 		for k in args: # --f_<export>=value overrides EdenFoliage exports before it builds
 			if k.begins_with("f_"):
 				pf.set(k.substr(2), str_to_var(args[k]))
+		if args.has("only"): # --only=grass,trees,bushes,rocks,wood (or none): other layers off, on a copy
+			var groups: PackedStringArray = args.only.split(",")
+			var cfg: EdenFoliageConfig = pf.config.duplicate(true)
+			for b in cfg.biomes:
+				for l in b.layers:
+					l.enabled = _layer_group(l) in groups
+			pf.config = cfg
+			result.only = args.only
 		instancers.append(pf)
 		_setup_view()
 		return
@@ -117,6 +125,18 @@ func _initialize() -> void:
 	_setup_view()
 	result.mode = mode
 	result.tree_impl = args.get("tree_impl", "scene")
+
+
+func _layer_group(l: EdenFoliageLayer) -> String:
+	if l.is_grass():
+		return "grass"
+	if l.is_tree():
+		return "trees"
+	if l.is_rock():
+		return "rocks"
+	if l.kind == EdenFoliageLayer.Kind.BRANCH or l.kind == EdenFoliageLayer.Kind.LOG:
+		return "wood"
+	return "bushes"
 
 
 func _setup_view() -> void:
@@ -341,6 +361,7 @@ func _process(_delta: float) -> bool:
 			camera.transform = Transform3D(Basis.looking_at(f * 100.0 - d * 12.0, d), p)
 			if phase_frame >= WALK_FRAMES:
 				result.walk = _stats()
+				result.walk_series = {"frame_ms": Array(frame_ms), "gpu_ms": Array(gpu_ms)}
 				_finish()
 				return true
 	return false

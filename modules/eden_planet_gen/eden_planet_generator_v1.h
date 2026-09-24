@@ -67,6 +67,25 @@ public:
 	// evaluated on land) — extend the climate gate if sea temperature is needed.
 	bool sample_surface(const Vector3 &dir, SurfaceSample &out) const;
 
+	// GDScript-bound counterpart for material queries specifically: same bisection/cost
+	// characteristics as sample_surface(), but returns the MIXEL4 material (MAT_* constant)
+	// with the highest blend weight at the surface point along `dir`, decoding all 4 packed
+	// slots -- not just the primary "land material" slot, which can carry zero weight at a
+	// coastline/underwater point even though a real material is packed there. Exists so
+	// GDScript callers never have to hand-decode MIXEL4's nibble packing themselves: an earlier
+	// GDScript query only checked slot 0 and silently misread ocean/coastal terrain as whatever
+	// land material happened to be packed there with zero weight, so e.g. a "find dominant
+	// material X" search always failed to actually match X. Returns -1 if setup() hasn't
+	// completed. Ties are broken by lowest material index, matching the mesher's own
+	// deterministic tie-break (see transvoxel_materials_mixel4.h's IndexAndWeightComparator) so
+	// this reports the same material the rendered mesh will actually show.
+	int sample_dominant_material(const Vector3 &dir) const;
+
+	// ponytail: debug/probe helper (GDScript-bound) — thin wrapper around sample_surface()
+	// exposing just the biome enum, for the voxel_data_probe.gd speckle investigation. Delete
+	// once the biome-flip diagnosis (BIOME_MATERIAL_PLAN.md) is resolved if nothing else uses it.
+	int sample_biome_at(const Vector3 &dir) const;
+
 	// ── Core VoxelGenerator overrides ────────────────────────────────────
 	Result generate_block(VoxelQueryData input) override;
 	int get_used_channels_mask() const override;
@@ -297,6 +316,21 @@ public:
 	float get_biome_region_strength() const;
 	void set_biome_region_seed_offset(int v);
 	int get_biome_region_seed_offset() const;
+
+	// When true, CHANNEL_INDICES carries ONE 8-bit material id per voxel and CHANNEL_WEIGHTS is
+	// left untouched, for use with VoxelMesherTransvoxel's TEXTURES_SINGLE_S4 mode instead of
+	// TEXTURES_MIXEL4_S4. In MIXEL4 every voxel stores 4 material ids + 4 quantized (4-bit)
+	// weights, so neighbouring voxels each carry their own slightly-different weight mix and the
+	// mesher additionally re-picks a per-cell top-4 -- that disagreement between adjacent voxels
+	// is what shows up as fine material speckle on flat-coloured terrain. In SINGLE mode there is
+	// no per-voxel weight field to disagree about: the mesher derives blend weights purely
+	// geometrically (which material each cell corner holds + where the isosurface crosses the
+	// edge), so transitions are interpolated across triangles instead.
+	// NOTE: TEXTURES_SINGLE_S4 asserts 8-bit indices, so the terrain's VoxelFormat must set
+	// indices_depth = DEPTH_8_BIT (see eden_foliage_demo.gd). Default stays false so existing
+	// MIXEL4 scenes (eden_materials_showcase, eden_stress_test, voxel_water_demo) are unaffected.
+	void set_single_material_mode(bool v);
+	bool get_single_material_mode() const;
 
 	// Caves
 	void set_enable_caves(bool v);
@@ -533,6 +567,9 @@ private:
 		float biome_region_strength = 0.75f;
 		int biome_region_seed_offset = 0;
 
+		// See set_single_material_mode().
+		bool single_material_mode = false;
+
 		// Caves
 		bool enable_caves = false;
 		float cave_carve_strength = 80.0f;
@@ -699,6 +736,8 @@ private:
 		float cont_transition = 1.0f; // 0=land 1=ocean
 		float macro_land_mask = 0.0f;
 		int indices = 0, weights = 0; // MIXEL4, valid when with_materials and VOXEL_FULL
+		// Single 8-bit material id for single_material_mode (see set_single_material_mode).
+		int single_mat = MAT_ROCK;
 	};
 
 	static SampleConsts _make_sample_consts(const Parameters &params);
@@ -743,7 +782,23 @@ private:
 	int _land_material_for(int biome, float alt, float temp, float mtn,
 			const Parameters &p) const;
 
-	static void _pack_mixel4(int land_mat, int ocean_mat, float cont,
+	// Smooth-blending replacement for _land_material_for(): instead of picking ONE material via
+	// hard >= thresholds (which makes adjacent voxels flip abruptly between two completely
+	// different materials wherever the underlying continuous field -- altitude, mountain-ness,
+	// temperature -- hovers near a threshold), this returns the two strongest candidate
+	// materials plus a blend factor, computed with smoothstep bands. MIXEL4 already carries 4
+	// material slots per voxel and _pack_mixel4 was leaving the 4th on a zero-weight filler, so
+	// the second material costs nothing extra in the voxel format, mesher, or shader.
+	// r_blend_b is mat_b's share of the land portion (0 = pure mat_a, 0.5 = even mix).
+	// biome2/biome_blend are _classify_biome_fast()'s runner-up biome and its share (it already
+	// computes these for detail-noise blending). Feeding them in matters because biome selection
+	// is an argmax over noise-derived weights: wherever two biomes are near-tied across a broad
+	// region, that argmax flips PER VOXEL, so a hard biome->material mapping dithers between two
+	// completely different materials. Blending by biome_blend removes that flip at its source.
+	void _land_material_blend(int biome, int biome2, float biome_blend, float alt, float temp, float mtn,
+			const Parameters &p, int &r_mat_a, int &r_mat_b, float &r_blend_b) const;
+
+	static void _pack_mixel4(int land_mat, int land_mat_b, float land_blend_b, int ocean_mat, float cont,
 			float sand_start, float sand_end,
 			float ocean_start, float ocean_end,
 			int &r_indices, int &r_weights);

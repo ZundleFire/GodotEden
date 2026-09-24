@@ -89,6 +89,32 @@ public:
 	Result generate_block(VoxelQueryData input) override;
 	int get_used_channels_mask() const override;
 
+	// Sampling at arbitrary points, not just over an axis-aligned block.
+	//
+	// Needed by anything that follows a surface rather than a grid: the far
+	// field's radial columns (modules/voxel/far), detail normalmaps, and
+	// instancing on slopes. The generator is already built on batched `_series`
+	// kernels that take point arrays, so this is the same work generate_block
+	// does minus the grid.
+	//
+	// CHANNEL_SDF only; see the implementation for why.
+	bool supports_series_generation() const override {
+		return true;
+	}
+
+	// NOTE: `Span` and `Vector3f` must be qualified. Godot core has a `Span` of
+	// its own, and this class sits in the global namespace where the unqualified
+	// names do not resolve to the ones the base class declares.
+	void generate_series(
+			zylann::Span<const float> positions_x,
+			zylann::Span<const float> positions_y,
+			zylann::Span<const float> positions_z,
+			unsigned int channel,
+			zylann::Span<float> out_values,
+			zylann::Vector3f min_pos,
+			zylann::Vector3f max_pos
+	) override;
+
 	// Surface values along a direction from the planet center: height (m, relative to planet_radius),
 	// ridge, erosion, temperature, moisture, biome_id (see FCTerrainMaterialBlend).
 	Dictionary sample_surface(Vector3 direction) const;

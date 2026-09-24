@@ -93,11 +93,11 @@ void EdenPlanetGeneratorV1::setup() {
 			if (td.bnd_type_a == PlanetTectonics::BND_TRENCH ||
 					td.bnd_type_a == PlanetTectonics::BND_RIFT) {
 				val_p = 1.0f - _ss(p.valley_falloff_start, p.valley_falloff_end, td.falloff_s);
-				if (td.bnd_type_a == PlanetTectonics::BND_TRENCH) {
-					val_p *= p.trench_depth;
-				} else {
-					val_p *= p.rift_depth;
-				}
+				// Kept in [0,1] like _tect_mountain -- trench_depth/rift_depth are applied once,
+				// at point of use (valley = trench_depth * trench_mask), not here. Scaling here
+				// saturated line_raw = MAX(t_mountain, t_valley) against [0,1]-scale thresholds,
+				// blowing valleys out across the whole falloff band and starving mountains of
+				// their share of the shared tect_line mask.
 			}
 			_tect_valley.write[idx] = val_p;
 		}
@@ -293,8 +293,12 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 	// ── Shell rejection ──────────────────────────────────────────────────
 	if (dist_c + diag * 0.5f < shell_inner) {
 		buffer.clear_channel_f(VoxelBuffer::CHANNEL_SDF, -100.0f);
-		buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, sc.rock_indices);
-		buffer.clear_channel(VoxelBuffer::CHANNEL_WEIGHTS, sc.rock_weights);
+		if (params.single_material_mode) {
+			buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, MAT_ROCK);
+		} else {
+			buffer.clear_channel(VoxelBuffer::CHANNEL_INDICES, sc.rock_indices);
+			buffer.clear_channel(VoxelBuffer::CHANNEL_WEIGHTS, sc.rock_weights);
+		}
 		result.max_lod_hint = true;
 		return result;
 	}
@@ -355,14 +359,26 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 					}
 				};
 
+				// In single_material_mode only CHANNEL_INDICES is written (one 8-bit id);
+				// CHANNEL_WEIGHTS is deliberately left alone, since there is no per-voxel
+				// weight field in that mode. See set_single_material_mode().
+				const bool single_mode = params.single_material_mode;
+				auto write_material = [&](int packed_indices, int packed_weights, int single_id) {
+					if (single_mode) {
+						buffer.set_voxel(single_id, x, y, z, VoxelBuffer::CHANNEL_INDICES);
+					} else {
+						buffer.set_voxel(packed_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
+						buffer.set_voxel(packed_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+					}
+				};
+
 				switch (code) {
 					case VOXEL_SKIP_AIR:
 						buffer.set_voxel_f(1.0f, x, y, z, VoxelBuffer::CHANNEL_SDF);
 						break;
 					case VOXEL_SKIP_SOLID:
 						buffer.set_voxel_f(-1.0f, x, y, z, VoxelBuffer::CHANNEL_SDF);
-						buffer.set_voxel(sc.rock_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
-						buffer.set_voxel(sc.rock_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+						write_material(sc.rock_indices, sc.rock_weights, MAT_ROCK);
 						break;
 					case VOXEL_EARLY_AIR:
 						buffer.set_voxel_f(vs.sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
@@ -370,20 +386,16 @@ zylann::voxel::VoxelGenerator::Result EdenPlanetGeneratorV1::generate_block(Voxe
 						break;
 					case VOXEL_EARLY_SOLID:
 						buffer.set_voxel_f(vs.sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
-						buffer.set_voxel(sc.rock_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
-						buffer.set_voxel(sc.rock_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+						write_material(sc.rock_indices, sc.rock_weights, MAT_ROCK);
 						break;
 					case VOXEL_FULL:
 						buffer.set_voxel_f(vs.sdf, x, y, z, VoxelBuffer::CHANNEL_SDF);
 						if (do_materials) {
-							buffer.set_voxel(vs.indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
-							buffer.set_voxel(vs.weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+							write_material(vs.indices, vs.weights, vs.single_mat);
 						} else if (vs.cont_transition > 0.5f) {
-							buffer.set_voxel(sc.ocean_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
-							buffer.set_voxel(sc.ocean_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+							write_material(sc.ocean_indices, sc.ocean_weights, MAT_OCEAN_FLOOR);
 						} else {
-							buffer.set_voxel(sc.rock_indices, x, y, z, VoxelBuffer::CHANNEL_INDICES);
-							buffer.set_voxel(sc.rock_weights, x, y, z, VoxelBuffer::CHANNEL_WEIGHTS);
+							write_material(sc.rock_indices, sc.rock_weights, MAT_ROCK);
 						}
 						bake_water_if_ocean();
 						break;
@@ -422,11 +434,12 @@ EdenPlanetGeneratorV1::SampleConsts EdenPlanetGeneratorV1::_make_sample_consts(c
 	c.beach_width_m = MAX(params.beach_width_m, 1.0f);
 
 	// Pre-compute MIXEL4 for bulk fills.
-	_pack_mixel4(MAT_ROCK, MAT_OCEAN_FLOOR, 0.0f,
+	// Uniform presets: no secondary land material (blend 0).
+	_pack_mixel4(MAT_ROCK, MAT_ROCK, 0.0f, MAT_OCEAN_FLOOR, 0.0f,
 			c.cont_sand_start, c.cont_sand_end,
 			c.cont_ocean_start, c.cont_ocean_end,
 			c.rock_indices, c.rock_weights);
-	_pack_mixel4(MAT_OCEAN_FLOOR, MAT_OCEAN_FLOOR, 1.0f,
+	_pack_mixel4(MAT_OCEAN_FLOOR, MAT_OCEAN_FLOOR, 0.0f, MAT_OCEAN_FLOOR, 1.0f,
 			c.cont_sand_start, c.cont_sand_end,
 			c.cont_ocean_start, c.cont_ocean_end,
 			c.ocean_indices, c.ocean_weights);
@@ -489,8 +502,19 @@ EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, 
 				const float map_v = 0.5f - Math::asin(CLAMP(uy, -1.0f, 1.0f)) * INV_PI;
 
 				const float t_oceanic = _sample_tect_map(tect_oceanic, map_u, map_v);
-				const float t_mountain = _sample_tect_map(tect_mountain, map_u, map_v);
-				const float t_valley = _sample_tect_map(tect_valley, map_u, map_v);
+				float t_mountain = _sample_tect_map(tect_mountain, map_u, map_v);
+				float t_valley = _sample_tect_map(tect_valley, map_u, map_v);
+
+				// Near the poles, map_u = atan2(uz, ux) becomes degenerate (all longitudes
+				// converge to a point), so bilinear sampling of the baked equirect map blends
+				// between texels that represent physically distant, unrelated plate states.
+				// That shows up as chaotic mountain/trench spikes right along the pole axis.
+				// Fade the tectonic contribution out over the last ~5 degrees of latitude to
+				// avoid sampling the singularity; the polar cap is a negligible fraction of
+				// surface area so losing plate detail there is unnoticeable.
+				const float pole_fade = 1.0f - _ss(0.9962f, 1.0f, Math::abs(uy));
+				t_mountain *= pole_fade;
+				t_valley *= pole_fade;
 
 				// ── Continent mask (pure noise) ────────────────────
 				// Land vs ocean is determined entirely by continent noise — tectonic plate
@@ -623,52 +647,46 @@ EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, 
 				const float mtn_lane = CLAMP(0.5f + 0.5f * tect_split, 0.0f, 1.0f);
 				const float trench_lane = 1.0f - mtn_lane;
 
+				// Smooth stand-in for `mtn` (below) used ONLY for material classification, not
+				// terrain shape. `mtn` gets multiplied by `erosion_shape`, an intentionally
+				// jagged per-octave gully simulation (sign-flipping "straight" term, see the loop
+				// below) -- great for carving visible erosion channels into the SDF, but
+				// _land_material_for() thresholds mtn/mountain_height into a single discrete
+				// material choice per voxel, so every gully-line sign flip near that threshold
+				// flipped the material category too, producing a fine salt-and-pepper
+				// grass/rock (or moss/rock) speckle with no blending between materials.
+				// tect_line is already the smooth (bilinear-sampled tectonic map) envelope that
+				// erosion_shape modulates, so using it directly gives material classification the
+				// mountain's general shape without its per-voxel jaggedness.
+				const float mtn_smooth = params.mountain_height * tect_line * mtn_lane * macro_land_mask;
+
 				float mtn = 0.0f;
 				float valley = 0.0f;
 				if (tect_line > 0.001f) {
-					// Runevision-inspired fast erosion filter (fade approach + straight gullies).
-					// This is an efficient approximation suitable for voxel worker threads.
-					float gully_sum = 0.0f;
-					float combi_mask = 1.0f;
-					float fade_target = CLAMP((alt + params.ocean_depth) / MAX(params.continent_height + params.ocean_depth, 1.0f), 0.0f, 1.0f) * 2.0f - 1.0f;
-					const float eps = 320.0f;
-					for (int oct = 0; oct < 3; ++oct) {
-						const float fmul = Math::pow(2.0f, float(oct));
-						const float amp_oct = Math::pow(0.55f, float(oct));
-						const float nx = sph_x * fmul;
-						const float ny = sph_y * fmul;
-						const float nz = sph_z * fmul;
-						const float gx = noise_mountain->get_noise_3d(nx + eps, ny, nz) - noise_mountain->get_noise_3d(nx - eps, ny, nz);
-						const float gy = noise_mountain->get_noise_3d(nx, ny + eps, nz) - noise_mountain->get_noise_3d(nx, ny - eps, nz);
-						const float gz = noise_mountain->get_noise_3d(nx, ny, nz + eps) - noise_mountain->get_noise_3d(nx, ny, nz - eps);
-						Vector3 grad(gx, gy, gz);
-						const float grad_radial = grad.dot(Vector3(ux, uy, uz));
-						grad -= Vector3(ux, uy, uz) * grad_radial;
-						const float slope = grad.length();
-						Vector3 flow = (slope > 1e-5f) ? (-grad / slope) : Vector3(0, 1, 0);
-						Vector3 perp = Vector3(ux, uy, uz).cross(flow);
-						const float plen = perp.length();
-						if (plen > 1e-5f) {
-							perp /= plen;
-						} else {
-							perp = Vector3(0, 0, 1);
-						}
-
-						const float stripe_coord = nx * perp.x + ny * perp.y + nz * perp.z;
-						const float phase = stripe_coord * 0.00011f + float(oct) * 1.618f;
-						const float c = Math::cos(phase);
-						const float s = Math::sin(phase);
-						const float straight = (s >= 0.0f) ? 1.0f : -1.0f;
-						const float t = CLAMP(slope * 0.75f, 0.0f, 1.0f);
-						const float ease_out = 1.0f - (1.0f - t) * (1.0f - t);
-						const float mask = combi_mask * ease_out;
-						const float faded = Math::lerp(fade_target, c, mask);
-						gully_sum += faded * amp_oct;
-						fade_target = faded;
-						combi_mask *= CLAMP(1.0f - 0.55f * (1.0f - Math::abs(straight)), 0.0f, 1.0f);
-					}
-
-					const float erosion_shape = CLAMP(gully_sum * 0.5f + 0.5f, 0.0f, 1.0f);
+					// EDEN FORK: this used to be a "Runevision-inspired fast erosion filter"
+					// building escarpment/gully shape from a finite-difference SDF gradient plus
+					// a per-octave DISCONTINUOUS sign-flip ("straight gullies", see git history
+					// for the original ~45-line algorithm). That discontinuity, at a spatial
+					// frequency fine enough relative to LOD0 mesh resolution, perturbed
+					// Transvoxel-computed normals into a persistent faceted-lighting checkerboard
+					// under flat-colored MIXEL4 shading -- confirmed by elimination (zeroing this
+					// contribution entirely turned an otherwise-checkerboarded area perfectly
+					// smooth; a 70% amplitude CUT of the original algorithm did not help at all,
+					// showing this was a threshold/discontinuity effect, not a
+					// gradient-proportional-to-amplitude one). Tried gating activation by
+					// tect_line (only run near a real mountain/trench core) first -- didn't help
+					// either, because this fork's baked tectonic map (PlanetTectonics,
+					// num_plates=16, num_voronoi_points=1200) keeps tect_line elevated broadly
+					// rather than sharply peaked at plate boundaries, so there's no clean "far
+					// tail" region to gate out.
+					//
+					// Replaced with a single smooth noise sample: still gives real, continuous,
+					// noise-driven mountain/trench elevation via the same mtn_mask/trench_mask
+					// proximity+plate-lane+land-mask modulation as before, just without the
+					// discontinuous escarpment/gully DETAIL. If a textured (not flat-color)
+					// material pipeline exists later, a proper anti-aliased erosion pass could
+					// reintroduce that detail without this artifact.
+					const float erosion_shape = CLAMP(noise_mountain->get_noise_3d(sph_x, sph_y, sph_z) * 0.5f + 0.5f, 0.0f, 1.0f);
 					const float mtn_mask = tect_line * mtn_lane * macro_land_mask;
 					const float trench_mask = tect_line * trench_lane;
 					mtn = erosion_shape * params.mountain_height * mtn_mask;
@@ -763,6 +781,10 @@ EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, 
 					}
 					detail = d1 * detail_mask;
 					// Small neutral breakup ensures no continent region stays overly flat.
+					// (Amplitude left at the original 0.08 -- root cause of the faceted-lighting
+					// checkerboard turned out to be the mountain/valley erosion mask below, not
+					// this term; see that fix's comment. Ruled out here via elimination: forcing
+					// detail to 0 entirely didn't fix the artifact either.)
 					detail += noise_hills->get_noise_3d(sph_x, sph_y, sph_z) *
 							(params.hills_amplitude * 0.08f) * detail_mask;
 				}
@@ -783,14 +805,49 @@ EdenPlanetGeneratorV1::VoxelCode EdenPlanetGeneratorV1::_sample_voxel(float wx, 
 					if (macro_land_mask <= 0.1f) {
 						biome = BIOME_OCEAN;
 					}
+					// The material path deliberately uses the biome from BEFORE the hard beach
+					// override below: _land_material_blend() now applies the beach as a smooth
+					// MAT_SAND weight itself, so also forcing BIOME_DESERT here would both
+					// double-count sand and reintroduce exactly the abrupt per-voxel flip this
+					// blending exists to remove. The override is still applied to `biome` after,
+					// so out.biome / sample_surface() keep their existing semantics.
+					const int material_biome = biome;
 					if (alt >= 0.0f && alt <= beach_width_m && biome != BIOME_OCEAN) {
 						biome = BIOME_DESERT;
 					}
-					int land_mat = (biome == BIOME_OCEAN) ? MAT_OCEAN_FLOOR : _land_material_for(biome, alt, temp, mtn, params);
-					_pack_mixel4(land_mat, MAT_OCEAN_FLOOR, cont_transition,
+					int land_a = MAT_OCEAN_FLOOR;
+					int land_b = MAT_OCEAN_FLOOR;
+					float land_blend = 0.0f;
+					if (material_biome != BIOME_OCEAN) {
+						_land_material_blend(material_biome, biome2, biome_blend,
+								alt, temp, mtn_smooth, params,
+								land_a, land_b, land_blend);
+					}
+					_pack_mixel4(land_a, land_b, land_blend, MAT_OCEAN_FLOOR, cont_transition,
 							cont_sand_start, cont_sand_end,
 							cont_ocean_start, cont_ocean_end,
 							out.indices, out.weights);
+
+					// single_material_mode: collapse the same decision to ONE material id rather
+					// than a weighted mix. Both the sand and ocean shares come from the smooth
+					// `cont_transition` field, so thresholding them at 0.5 puts the boundary on a
+					// clean level-set curve rather than scattering it voxel-to-voxel; the mesher
+					// then blends across that curve geometrically.
+					{
+						const float sand_share = CLAMP(
+								(cont_transition - cont_sand_start) / MAX(cont_sand_end - cont_sand_start, 0.001f),
+								0.0f, 1.0f);
+						const float ocean_share = CLAMP(
+								(cont_transition - cont_ocean_start) / MAX(cont_ocean_end - cont_ocean_start, 0.001f),
+								0.0f, 1.0f);
+						if (ocean_share >= 0.5f) {
+							out.single_mat = MAT_OCEAN_FLOOR;
+						} else if (sand_share >= 0.5f) {
+							out.single_mat = MAT_SAND;
+						} else {
+							out.single_mat = land_a;
+						}
+					}
 				}
 
 				out.sdf = sdf;
@@ -1114,7 +1171,80 @@ int EdenPlanetGeneratorV1::_land_material_for(int biome, float alt, float temp, 
 	}
 }
 
-void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int ocean_mat, float cont,
+static inline int eden_biome_base_material(int biome) {
+	switch (biome) {
+		case EdenPlanetGeneratorV1::BIOME_TUNDRA: return EdenPlanetGeneratorV1::MAT_SNOW;
+		case EdenPlanetGeneratorV1::BIOME_DESERT: return EdenPlanetGeneratorV1::MAT_SAND;
+		case EdenPlanetGeneratorV1::BIOME_TROPICAL: return EdenPlanetGeneratorV1::MAT_MOSS;
+		case EdenPlanetGeneratorV1::BIOME_FOREST: return EdenPlanetGeneratorV1::MAT_DIRT;
+		case EdenPlanetGeneratorV1::BIOME_HILLS_MEADOWS: return EdenPlanetGeneratorV1::MAT_GRASS;
+		case EdenPlanetGeneratorV1::BIOME_GRASSLAND: return EdenPlanetGeneratorV1::MAT_GRASS;
+		default: return EdenPlanetGeneratorV1::MAT_GRASS;
+	}
+}
+
+void EdenPlanetGeneratorV1::_land_material_blend(int biome, int biome2, float biome_blend,
+		float alt, float temp, float mtn,
+		const Parameters &p, int &r_mat_a, int &r_mat_b, float &r_blend_b) const {
+	// Base material for this biome (same mapping _land_material_for's switch used).
+	const int biome_mat = eden_biome_base_material(biome);
+	const int biome_mat2 = eden_biome_base_material(biome2);
+	const float b2 = CLAMP(biome_blend, 0.0f, 1.0f);
+
+	const float mtn_norm = CLAMP(mtn / MAX(p.mountain_height, 1.0f), 0.0f, 2.0f);
+
+	// Each of these replaces one hard `>=` threshold in _land_material_for with a smoothstep
+	// band, so a voxel sitting near the boundary gets a partial weight instead of an abrupt
+	// full-material flip relative to its neighbor.
+	const float mtn_band = 0.08f; // half-width, in mtn_norm units
+	const float cold = _ss(0.72f, 0.64f, temp); // 1 = cold enough for snow
+	const float snow_mtn = _ss(p.mountain_snow_start - mtn_band, p.mountain_snow_start + mtn_band, mtn_norm) * cold;
+	const float rock_mtn = _ss(p.mountain_rock_start - mtn_band, p.mountain_rock_start + mtn_band, mtn_norm);
+	const float snow_alt = _ss(2200.0f, 2800.0f, alt) * _ss(0.60f, 0.50f, temp);
+	// Beach: was `alt >= 0 && alt <= beach_width_m`. beach_width_m defaults to 50m, and terrain
+	// altitude naturally hovers around that value across whole sloped bands, so this specific
+	// threshold was the dominant source of per-voxel sand/biome-material dithering.
+	const float beach = (alt >= -p.beach_width_m * 0.25f)
+			? (1.0f - _ss(p.beach_width_m * 0.5f, p.beach_width_m * 1.5f, alt))
+			: 0.0f;
+
+	// Resolve to a normalized set, respecting the original priority order
+	// (snow > rock > beach > biome) so behavior stays recognisable, just softened.
+	const float w_snow = CLAMP(MAX(snow_mtn, snow_alt), 0.0f, 1.0f);
+	const float w_rock = CLAMP(rock_mtn, 0.0f, 1.0f - w_snow);
+	const float w_beach = CLAMP(beach, 0.0f, 1.0f - w_snow - w_rock);
+	const float w_biome = CLAMP(1.0f - w_snow - w_rock - w_beach, 0.0f, 1.0f);
+
+	float weights[16] = {};
+	weights[MAT_SNOW] += w_snow;
+	weights[MAT_ROCK] += w_rock;
+	weights[MAT_SAND] += w_beach;
+	// Split the biome share across the top-two biomes rather than committing entirely to the
+	// argmax winner -- this is what removes the per-voxel biome flip described in the header.
+	weights[biome_mat] += w_biome * (1.0f - b2);
+	weights[biome_mat2] += w_biome * b2;
+
+	// Pick the two strongest materials.
+	int best_a = MAT_GRASS, best_b = MAT_GRASS;
+	float wa = -1.0f, wb = -1.0f;
+	for (int i = 0; i < 16; ++i) {
+		if (weights[i] > wa) {
+			wb = wa;
+			best_b = best_a;
+			wa = weights[i];
+			best_a = i;
+		} else if (weights[i] > wb) {
+			wb = weights[i];
+			best_b = i;
+		}
+	}
+
+	r_mat_a = best_a;
+	r_mat_b = (wb > 0.0f) ? best_b : best_a;
+	r_blend_b = (wa + wb > 1e-6f) ? CLAMP(wb / (wa + wb), 0.0f, 1.0f) : 0.0f;
+}
+
+void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int land_mat_b, float land_blend_b, int ocean_mat, float cont,
 		float sand_start, float sand_end,
 		float ocean_start, float ocean_end,
 		int &r_indices, int &r_weights) {
@@ -1122,6 +1252,24 @@ void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int ocean_mat, float cont
 	float ocean_width = MAX(ocean_end - ocean_start, 0.001f);
 	float sand_up = CLAMP((cont - sand_start) / sand_width, 0.0f, 1.0f);
 	float ocean_up = CLAMP((cont - ocean_start) / ocean_width, 0.0f, 1.0f);
+	// EDEN FORK: `cont` (continent transition) carries real, continuous noise (continent_warp
+	// etc.) even far inland, well below sand_start -- rare enough not to change the visible
+	// biome/height there, but frequent enough that Math::round() below occasionally rounds a
+	// near-zero-but-nonzero sand_up/ocean_up up to weight 1 (out of 15) instead of 0. That
+	// single-voxel weight flicker was enough to make a VoxelBuffer block fail
+	// VoxelBuffer::is_uniform() and fall into the mesher's per-cell reselection path across
+	// ~30% of all cells scene-wide (confirmed via mesher-side instrumentation counting how often
+	// that path fires), which is what was producing a persistent fine speckle/checkerboard even
+	// in areas a sparser point-sample probe found completely clean. Snapping near-zero blend
+	// fractions to exactly zero keeps genuinely-inland voxels bit-for-bit identical to their
+	// neighbors, so those blocks stay uniform and skip the noisy path entirely; only real
+	// coastal transitions (well above this deadzone) are unaffected.
+	if (sand_up < 0.05f) {
+		sand_up = 0.0f;
+	}
+	if (ocean_up < 0.05f) {
+		ocean_up = 0.0f;
+	}
 
 	int o4 = CLAMP(int(Math::round(ocean_up * 15.0f)), 0, 15);
 	int s4 = CLAMP(int(Math::round(sand_up * 15.0f)), 0, 15 - o4);
@@ -1129,15 +1277,38 @@ void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int ocean_mat, float cont
 
 	int sand_mat = MAT_SAND;
 
-	if (land_mat == MAT_SAND) {
-		s4 += l4;
-		l4 = 0;
+	// Split the land portion between the primary and secondary land material (see
+	// _land_material_blend). Slot 3 used to always be a zero-weight filler, so carrying a real
+	// second land material there is free -- no voxel-format, mesher, or shader change needed.
+	// All the folding below exists because MIXEL4 requires the 4 slot indices to be DISTINCT
+	// (see mixel4::debug_check_texture_indices): whenever the secondary material collides with
+	// a slot that's already present, its weight is merged into that slot instead of duplicated.
+	// Every branch only moves weight between slots, so the total stays exactly 15.
+	int l4_b = CLAMP(int(Math::round(float(l4) * CLAMP(land_blend_b, 0.0f, 1.0f))), 0, l4);
+	int l4_a = l4 - l4_b;
+	if (land_mat_b == land_mat) {
+		l4_a += l4_b;
+		l4_b = 0;
 	}
 
-	// Find filler material IDs (ones not used by land/sand/ocean).
+	if (land_mat == MAT_SAND) {
+		s4 += l4_a;
+		l4_a = 0;
+	}
+	if (l4_b > 0 && land_mat_b == sand_mat) {
+		s4 += l4_b;
+		l4_b = 0;
+	}
+	if (l4_b > 0 && land_mat_b == ocean_mat) {
+		o4 += l4_b;
+		l4_b = 0;
+	}
+
+	// Find filler material IDs (ones not used by land/sand/ocean, nor by the secondary land
+	// material while it still carries weight).
 	int filler0 = -1, filler1 = -1;
 	for (int i = 0; i < 16; i++) {
-		if (i != land_mat && i != sand_mat && i != ocean_mat) {
+		if (i != land_mat && i != sand_mat && i != ocean_mat && !(l4_b > 0 && i == land_mat_b)) {
 			if (filler0 < 0) {
 				filler0 = i;
 			} else if (filler1 < 0) {
@@ -1148,17 +1319,22 @@ void EdenPlanetGeneratorV1::_pack_mixel4(int land_mat, int ocean_mat, float cont
 	}
 
 	int idx0 = (land_mat != sand_mat) ? land_mat : filler0;
-	int idx3 = (land_mat != sand_mat) ? filler0 : filler1;
+	int idx3;
+	if (l4_b > 0) {
+		idx3 = land_mat_b;
+	} else {
+		idx3 = (land_mat != sand_mat) ? filler0 : filler1;
+	}
 
 	r_indices = (idx0 & 0xF) |
 			((sand_mat & 0xF) << 4) |
 			((ocean_mat & 0xF) << 8) |
 			((idx3 & 0xF) << 12);
 
-	r_weights = l4 |
-			(s4 << 4) |
-			(o4 << 8) |
-			(0 << 12);
+	r_weights = (l4_a & 0xF) |
+			((s4 & 0xF) << 4) |
+			((o4 & 0xF) << 8) |
+			((l4_b & 0xF) << 12);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1458,6 +1634,7 @@ EDEN_FLOAT_PROP(biome_spawn_tundra)
 EDEN_FLOAT_PROP(biome_spawn_hills_meadows)
 EDEN_FLOAT_PROP(biome_spawn_grassland)
 EDEN_FLOAT_PROP(biome_region_strength)
+EDEN_BOOL_PROP(single_material_mode)
 EDEN_BOOL_PROP(enable_caves)
 EDEN_FLOAT_PROP(cave_carve_strength)
 EDEN_FLOAT_PROP(cave_max_altitude)
@@ -1614,6 +1791,20 @@ EDEN_INT_PROP_SETUP(cave_fractal_type)
 
 void EdenPlanetGeneratorV1::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("setup"), &EdenPlanetGeneratorV1::setup);
+	ClassDB::bind_method(D_METHOD("sample_dominant_material", "dir"), &EdenPlanetGeneratorV1::sample_dominant_material);
+	ClassDB::bind_method(D_METHOD("sample_biome_at", "dir"), &EdenPlanetGeneratorV1::sample_biome_at);
+
+	// MAT_* were previously C++-only constants, forcing every GDScript caller (demo scripts,
+	// VoxelInstanceGenerator.voxel_texture_filter_array setup) to duplicate the same magic
+	// numbers by hand with no compiler check they stayed in sync with this class. Binding them
+	// once here is the single source of truth from now on -- e.g. EdenPlanetGeneratorV1.MAT_DIRT.
+	BIND_CONSTANT(MAT_GRASS);
+	BIND_CONSTANT(MAT_ROCK);
+	BIND_CONSTANT(MAT_SNOW);
+	BIND_CONSTANT(MAT_SAND);
+	BIND_CONSTANT(MAT_DIRT);
+	BIND_CONSTANT(MAT_MOSS);
+	BIND_CONSTANT(MAT_OCEAN_FLOOR);
 	ClassDB::bind_method(D_METHOD("get_tectonics"), &EdenPlanetGeneratorV1::get_tectonics);
 	ClassDB::bind_method(D_METHOD("set_climate_profile", "profile"), &EdenPlanetGeneratorV1::set_climate_profile);
 	ClassDB::bind_method(D_METHOD("get_climate_profile"), &EdenPlanetGeneratorV1::get_climate_profile);
@@ -1735,6 +1926,7 @@ void EdenPlanetGeneratorV1::_bind_methods() {
 	BIND_INT(biome_region_seed_offset);
 
 	// Caves
+	BIND_BOOL(single_material_mode);
 	BIND_BOOL(enable_caves);
 	BIND_FLOAT(cave_carve_strength, "");
 	BIND_FLOAT(cave_max_altitude, "");
@@ -1989,6 +2181,7 @@ void EdenPlanetGeneratorV1::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "biome_region_seed_offset", PROPERTY_HINT_RANGE, "-10000,10000,1"), "set_biome_region_seed_offset", "get_biome_region_seed_offset");
 
 	ADD_GROUP("Caves", "cave_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "single_material_mode"), "set_single_material_mode", "get_single_material_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "enable_caves"), "set_enable_caves", "get_enable_caves");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cave_carve_strength", PROPERTY_HINT_RANGE, "0.0,500.0,1.0"), "set_cave_carve_strength", "get_cave_carve_strength");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cave_max_altitude", PROPERTY_HINT_RANGE, "-1000.0,5000.0,10.0"), "set_cave_max_altitude", "get_cave_max_altitude");
@@ -2164,4 +2357,84 @@ bool EdenPlanetGeneratorV1::sample_surface(const Vector3 &dir, SurfaceSample &ou
 	out.biome = vs.biome;
 	out.is_ocean = vs.cont_transition > 0.5f;
 	return true;
+}
+
+int EdenPlanetGeneratorV1::sample_biome_at(const Vector3 &dir) const {
+	SurfaceSample out;
+	if (!sample_surface(dir, out)) {
+		return -1;
+	}
+	return out.biome;
+}
+
+int EdenPlanetGeneratorV1::sample_dominant_material(const Vector3 &dir) const {
+	Parameters params;
+	Ref<EdenPlanetClimateProfile> climate_profile;
+	Vector<float> tect_oceanic;
+	Vector<float> tect_mountain;
+	Vector<float> tect_valley;
+	SampleNoises sn;
+	{
+		zylann::RWLockRead rlock(_parameters_lock);
+		if (!_parameters.is_setup) {
+			return -1;
+		}
+		params = _parameters;
+		climate_profile = _climate_profile;
+		tect_oceanic = _tect_oceanic;
+		tect_mountain = _tect_mountain;
+		tect_valley = _tect_valley;
+		sn.continent = _noise_continent;
+		sn.hills = _noise_hills;
+		sn.mountain = _noise_mountain;
+		sn.climate = _noise_climate;
+		sn.desert = _noise_desert;
+		sn.forest = _noise_forest;
+		sn.tropical = _noise_tropical;
+		sn.tundra = _noise_tundra;
+		sn.grassland = _noise_grassland;
+		sn.biome_region = _noise_biome_region;
+		sn.cave = _noise_cave;
+	}
+	_apply_climate_profile(params, climate_profile);
+	sn.tect_oceanic = &tect_oceanic;
+	sn.tect_mountain = &tect_mountain;
+	sn.tect_valley = &tect_valley;
+
+	Vector3 d = dir;
+	if (d.length_squared() < 1e-12f) {
+		return -1;
+	}
+	d = d.normalized();
+
+	const SampleConsts sc = _make_sample_consts(params);
+
+	float lo = params.planet_radius + sc.alt_inner + 1.0f;
+	float hi = params.planet_radius + sc.alt_outer - 1.0f;
+	VoxelSample vs;
+	for (int i = 0; i < 28; ++i) {
+		const float mid = (lo + hi) * 0.5f;
+		_sample_voxel(d.x * mid, d.y * mid, d.z * mid, params, sn, sc, false, vs);
+		if (vs.sdf < 0.0f) {
+			lo = mid;
+		} else {
+			hi = mid;
+		}
+	}
+	const float surface_r = (lo + hi) * 0.5f;
+
+	_sample_voxel(d.x * (surface_r - 0.5f), d.y * (surface_r - 0.5f), d.z * (surface_r - 0.5f),
+			params, sn, sc, true, vs);
+
+	int best_index = vs.indices & 0xF;
+	int best_weight = vs.weights & 0xF;
+	for (int slot = 1; slot < 4; ++slot) {
+		const int idx = (vs.indices >> (slot * 4)) & 0xF;
+		const int w = (vs.weights >> (slot * 4)) & 0xF;
+		if (w > best_weight || (w == best_weight && idx < best_index)) {
+			best_weight = w;
+			best_index = idx;
+		}
+	}
+	return best_index;
 }

@@ -1,0 +1,512 @@
+[gd_resource type="Resource" script_class="EdenFoliageConfig" format=3 uid="uid://p5u8mxk0bux2"]
+
+[ext_resource type="Script" uid="uid://ro4kr103yax8" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
+[ext_resource type="Script" uid="uid://ekresl7y7y64" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
+[ext_resource type="Script" uid="uid://dcq0ig3lfvu7x" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
+
+[sub_resource type="Resource" id="Resource_uyh1r"]
+script = ExtResource("2_p1eig")
+name = "Grass"
+kind = 0
+variants = 1
+density = 5.0
+scale_min = 0.7
+scale_max = 1.4
+slope = Vector2(0, 35)
+materials = 1
+vertical_alignment = 0.6
+
+[sub_resource type="Resource" id="Resource_xfqtm"]
+script = ExtResource("2_p1eig")
+name = "Oak"
+kind = 2
+variants = 3
+density = 0.0035
+scale_min = 2.2
+scale_max = 3.2
+clump_size = 150.0
+temperature = Vector2(0.42, 1)
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_vwwki"]
+script = ExtResource("2_p1eig")
+name = "Birch"
+kind = 4
+variants = 3
+density = 0.003
+scale_min = 2.0
+scale_max = 3.0
+clump_size = 150.0
+temperature = Vector2(0, 0.6)
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_c862y"]
+script = ExtResource("2_p1eig")
+name = "Willow"
+kind = 5
+variants = 3
+density = 0.002
+scale_min = 2.0
+scale_max = 2.8
+clump_size = 150.0
+moisture = Vector2(0.72, 1)
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_6ra4n"]
+script = ExtResource("2_p1eig")
+name = "Fruit tree"
+kind = 8
+variants = 3
+density = 0.0015
+scale_min = 1.6
+scale_max = 2.4
+clump_size = 150.0
+temperature = Vector2(0.55, 1)
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_epmat"]
+script = ExtResource("2_p1eig")
+name = "Shrub"
+kind = 9
+density = 0.02
+scale_min = 0.7
+materials = 49
+draw_distance = 110.0
+
+[sub_resource type="Resource" id="Resource_a7617"]
+script = ExtResource("2_p1eig")
+name = "Fern"
+kind = 10
+variants = 1
+density = 0.03
+scale_min = 0.7
+moisture = Vector2(0.6, 1)
+materials = 33
+draw_distance = 70.0
+
+[sub_resource type="Resource" id="Resource_n7l64"]
+script = ExtResource("2_p1eig")
+name = "Berry bush"
+kind = 14
+variants = 1
+density = 0.006
+scale_min = 0.7
+scale_max = 1.2
+temperature = Vector2(0, 0.7)
+materials = 49
+draw_distance = 90.0
+
+[sub_resource type="Resource" id="Resource_uo2rn"]
+script = ExtResource("2_p1eig")
+name = "Branches"
+kind = 19
+density = 0.012
+scale_max = 1.2
+materials = 49
+vertical_alignment = 0.2
+draw_distance = 60.0
+
+[sub_resource type="Resource" id="Resource_2xjvs"]
+script = ExtResource("2_p1eig")
+name = "Logs"
+kind = 20
+density = 0.002
+scale_max = 1.2
+slope = Vector2(0, 25)
+materials = 49
+vertical_alignment = 0.2
+draw_distance = 150.0
+collision = true
+
+[sub_resource type="Resource" id="Resource_2rkrs"]
+script = ExtResource("1_y1pxh")
+name = "Temperate"
+temperature = Vector2(0.35, 0.8)
+moisture = Vector2(0.35, 1)
+materials = 49
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_uyh1r"), SubResource("Resource_xfqtm"), SubResource("Resource_vwwki"), SubResource("Resource_c862y"), SubResource("Resource_6ra4n"), SubResource("Resource_epmat"), SubResource("Resource_a7617"), SubResource("Resource_n7l64"), SubResource("Resource_uo2rn"), SubResource("Resource_2xjvs")])
+
+[sub_resource type="Resource" id="Resource_7h56b"]
+script = ExtResource("2_p1eig")
+name = "Grass"
+kind = 0
+variants = 1
+density = 5.0
+scale_min = 0.6
+scale_max = 1.1
+slope = Vector2(0, 35)
+materials = 1
+vertical_alignment = 0.6
+grass_base_color = Color(0.17, 0.3, 0.14, 1)
+grass_tip_color = Color(0.36, 0.48, 0.25, 1)
+
+[sub_resource type="Resource" id="Resource_ji6mu"]
+script = ExtResource("2_p1eig")
+name = "Pine"
+kind = 3
+variants = 3
+density = 0.007
+scale_min = 2.2
+scale_max = 3.4
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 53
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_vepnq"]
+script = ExtResource("2_p1eig")
+name = "Birch"
+kind = 4
+variants = 3
+density = 0.0015
+scale_min = 2.0
+scale_max = 3.0
+clump_size = 150.0
+temperature = Vector2(0.25, 1)
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_07620"]
+script = ExtResource("2_p1eig")
+name = "Shrub"
+kind = 9
+density = 0.012
+scale_min = 0.6
+scale_max = 1.1
+materials = 49
+draw_distance = 110.0
+
+[sub_resource type="Resource" id="Resource_acbbd"]
+script = ExtResource("2_p1eig")
+name = "Branches"
+kind = 19
+density = 0.012
+scale_max = 1.2
+materials = 49
+vertical_alignment = 0.2
+draw_distance = 60.0
+
+[sub_resource type="Resource" id="Resource_iksma"]
+script = ExtResource("2_p1eig")
+name = "Logs"
+kind = 20
+density = 0.003
+scale_max = 1.2
+slope = Vector2(0, 25)
+materials = 49
+vertical_alignment = 0.2
+draw_distance = 150.0
+collision = true
+
+[sub_resource type="Resource" id="Resource_7bex6"]
+script = ExtResource("1_y1pxh")
+name = "Boreal"
+temperature = Vector2(0.06, 0.4)
+moisture = Vector2(0.25, 1)
+materials = 17
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_7h56b"), SubResource("Resource_ji6mu"), SubResource("Resource_vepnq"), SubResource("Resource_07620"), SubResource("Resource_acbbd"), SubResource("Resource_iksma")])
+
+[sub_resource type="Resource" id="Resource_wkmi1"]
+script = ExtResource("2_p1eig")
+name = "Grass"
+kind = 0
+variants = 1
+density = 5.0
+scale_max = 1.5
+slope = Vector2(0, 35)
+materials = 1
+vertical_alignment = 0.6
+
+[sub_resource type="Resource" id="Resource_2y2yb"]
+script = ExtResource("2_p1eig")
+name = "Palm"
+kind = 6
+variants = 3
+density = 0.004
+scale_min = 1.8
+scale_max = 2.8
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 57
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_lofsu"]
+script = ExtResource("2_p1eig")
+name = "Fruit tree"
+kind = 8
+variants = 3
+density = 0.002
+scale_min = 1.6
+scale_max = 2.4
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 49
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_3twvk"]
+script = ExtResource("2_p1eig")
+name = "Fern"
+kind = 10
+variants = 1
+density = 0.04
+scale_max = 1.5
+materials = 33
+draw_distance = 70.0
+
+[sub_resource type="Resource" id="Resource_m04a3"]
+script = ExtResource("2_p1eig")
+name = "Shrub"
+kind = 9
+density = 0.02
+scale_max = 1.4
+materials = 49
+draw_distance = 110.0
+
+[sub_resource type="Resource" id="Resource_4qwq4"]
+script = ExtResource("1_y1pxh")
+name = "Tropical"
+temperature = Vector2(0.72, 1)
+moisture = Vector2(0.45, 1)
+materials = 9
+density_scale = 2.0
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_wkmi1"), SubResource("Resource_2y2yb"), SubResource("Resource_lofsu"), SubResource("Resource_3twvk"), SubResource("Resource_m04a3")])
+
+[sub_resource type="Resource" id="Resource_sigq6"]
+script = ExtResource("2_p1eig")
+name = "Dry grass"
+kind = 1
+variants = 1
+density = 5.0
+scale_min = 0.6
+scale_max = 1.2
+slope = Vector2(0, 35)
+materials = 17
+vertical_alignment = 0.6
+grass_base_color = Color(0.36, 0.33, 0.14, 1)
+grass_tip_color = Color(0.66, 0.58, 0.3, 1)
+
+[sub_resource type="Resource" id="Resource_0pwoe"]
+script = ExtResource("2_p1eig")
+name = "Dead tree"
+kind = 7
+variants = 3
+density = 0.0004
+scale_min = 1.6
+scale_max = 2.6
+slope = Vector2(0, 30)
+materials = 57
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_ah0r4"]
+script = ExtResource("2_p1eig")
+name = "Dead bush"
+kind = 11
+scale_min = 0.7
+materials = 57
+draw_distance = 110.0
+
+[sub_resource type="Resource" id="Resource_doous"]
+script = ExtResource("2_p1eig")
+name = "Cactus"
+kind = 13
+variants = 1
+density = 0.004
+scale_min = 0.7
+scale_max = 1.4
+temperature = Vector2(0.7, 1)
+materials = 25
+draw_distance = 150.0
+
+[sub_resource type="Resource" id="Resource_8avvj"]
+script = ExtResource("1_y1pxh")
+name = "Dry"
+temperature = Vector2(0.45, 1)
+moisture = Vector2(0, 0.38)
+materials = 26
+density_scale = 2.0
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_sigq6"), SubResource("Resource_0pwoe"), SubResource("Resource_ah0r4"), SubResource("Resource_doous")])
+
+[sub_resource type="Resource" id="Resource_meq0j"]
+script = ExtResource("2_p1eig")
+name = "Dead tree"
+kind = 7
+variants = 3
+density = 0.0005
+scale_min = 1.4
+scale_max = 2.2
+slope = Vector2(0, 30)
+materials = 53
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_lly70"]
+script = ExtResource("2_p1eig")
+name = "Pine"
+kind = 3
+variants = 3
+density = 0.0008
+scale_min = 1.2
+scale_max = 2.0
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 53
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_ehge7"]
+script = ExtResource("2_p1eig")
+name = "Stones"
+variants = 3
+density = 0.004
+scale_min = 0.4
+scale_max = 1.2
+slope = Vector2(0, 40)
+materials = 59
+sink = -0.15
+draw_distance = 90.0
+lichen = 0.15
+
+[sub_resource type="Resource" id="Resource_chiet"]
+script = ExtResource("1_y1pxh")
+name = "Tundra"
+temperature = Vector2(0, 0.1)
+materials = 55
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_meq0j"), SubResource("Resource_lly70"), SubResource("Resource_ehge7")])
+
+[sub_resource type="Resource" id="Resource_6efxk"]
+script = ExtResource("2_p1eig")
+name = "Pebbles"
+kind = 15
+variants = 1
+density = 0.02
+scale_min = 0.3
+scale_max = 0.8
+slope = Vector2(0, 45)
+materials = 59
+draw_distance = 50.0
+
+[sub_resource type="Resource" id="Resource_yil0x"]
+script = ExtResource("2_p1eig")
+name = "Stones"
+variants = 3
+density = 0.003
+scale_min = 0.3
+scale_max = 0.9
+slope = Vector2(0, 40)
+materials = 59
+sink = -0.15
+draw_distance = 90.0
+moss = 0.25
+lichen = 0.05
+
+[sub_resource type="Resource" id="Resource_tpjpg"]
+script = ExtResource("2_p1eig")
+name = "Boulders"
+variants = 3
+density = 0.0004
+scale_min = 1.0
+scale_max = 2.5
+slope = Vector2(0, 40)
+materials = 59
+sink = -0.12
+lod = 1
+collision = true
+moss = 0.4
+lichen = 0.05
+facet_detail = 2
+
+[sub_resource type="Resource" id="Resource_5ttj7"]
+script = ExtResource("1_y1pxh")
+name = "Grassland Rocks"
+materials = 57
+density_scale = 2.0
+size_scale = 2.0
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_6efxk"), SubResource("Resource_yil0x"), SubResource("Resource_tpjpg")])
+
+[sub_resource type="Resource" id="Resource_eiody"]
+script = ExtResource("2_p1eig")
+name = "Boulder field"
+variants = 3
+density = 0.0015
+scale_min = 1.5
+scale_max = 5.0
+sink = -0.15
+lod = 1
+collision = true
+lichen = 0.1
+
+[sub_resource type="Resource" id="Resource_f3k4g"]
+script = ExtResource("1_y1pxh")
+name = "Mountain Rock"
+slope = Vector2(0, 35)
+materials = 6
+density_scale = 3.0
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_eiody")])
+
+[sub_resource type="Resource" id="Resource_1qyht"]
+script = ExtResource("2_p1eig")
+name = "Cliff slabs"
+kind = 17
+variants = 3
+density = 0.0003
+scale_min = 18.0
+scale_max = 55.0
+vertical_alignment = 0.0
+sink = -0.18
+lod = 1
+collision = true
+roughness = 0.18
+
+[sub_resource type="Resource" id="Resource_hhmrf"]
+script = ExtResource("2_p1eig")
+name = "Cliff boulders"
+density = 0.0005
+scale_min = 8.0
+scale_max = 25.0
+vertical_alignment = 0.0
+sink = -0.15
+lod = 1
+collision = true
+roughness = 0.3
+
+[sub_resource type="Resource" id="Resource_hcdlu"]
+script = ExtResource("2_p1eig")
+name = "Spires"
+kind = 18
+density = 4e-05
+scale_min = 15.0
+scale_max = 40.0
+slope = Vector2(30, 80)
+vertical_alignment = 0.4
+sink = -0.2
+lod = 1
+collision = true
+
+[sub_resource type="Resource" id="Resource_ooxfq"]
+script = ExtResource("1_y1pxh")
+name = "Cliffs"
+slope = Vector2(35, 90)
+density_scale = 2.0
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_1qyht"), SubResource("Resource_hhmrf"), SubResource("Resource_hcdlu")])
+
+[resource]
+script = ExtResource("3_nll8y")
+biomes = Array[ExtResource("1_y1pxh")]([SubResource("Resource_2rkrs"), SubResource("Resource_7bex6"), SubResource("Resource_4qwq4"), SubResource("Resource_8avvj"), SubResource("Resource_chiet"), SubResource("Resource_5ttj7"), SubResource("Resource_f3k4g"), SubResource("Resource_ooxfq")])

@@ -30,7 +30,7 @@ uniform float dryness_tint : hint_range(0.0, 1.0) = 0.6;
 // Detail normals: two bands of procedural bump, faded out once a pixel spans more than a cell.
 // Perturbs NORMAL directly in world space -- voxel meshes carry no tangents, so NORMAL_MAP would
 // be undefined here.
-uniform float detail_normal_strength : hint_range(0.0, 3.0) = 0.6;
+uniform float detail_normal_strength : hint_range(0.0, 3.0) = 0.0;
 uniform float detail_normal_scale = 6.0; // meters, fine band (coarse band is 5x this)
 
 varying flat vec4 v_indices;
@@ -53,7 +53,12 @@ vec3 mat_albedo(int i) {
 	if (i == 3) return vec3(0.74, 0.60, 0.29); // sand
 	if (i == 4) return vec3(0.35, 0.21, 0.09); // dirt
 	if (i == 5) return vec3(0.11, 0.31, 0.17); // moss
-	if (i == 6) return vec3(0.11, 0.20, 0.27); // ocean floor
+	// Was (0.11, 0.20, 0.27) -- with no water surface rendered over it (no VoxelWaterSimulator
+	// in this scene yet), that dark an unlit-looking flat albedo reads as a near-black sphere
+	// below sea level from any distance, worse once gully_darkening below multiplies it further.
+	// Brightened as a placeholder; darken it again once a real water layer sits on top, since a
+	// seabed seen through actual water should be this dark.
+	if (i == 6) return vec3(0.20, 0.30, 0.36); // ocean floor
 	return vec3(1.0, 0.0, 1.0);
 }
 

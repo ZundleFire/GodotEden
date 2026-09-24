@@ -19,6 +19,7 @@ var foliage: VoxelInstancer
 var last_sig := ""
 var stable_since := 0
 var start := 0
+var gpu_ms: Array[float] = []
 
 
 func _initialize() -> void:
@@ -47,7 +48,15 @@ func _initialize() -> void:
 		if float(s.height) < 20.0:
 			continue
 		var score := 0.0
-		if biome == "cliff":
+		if biome == "vista":
+			# High ground with temperate, vegetated lowland ~3 km away
+			var t0 := d.cross(Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT).normalized()
+			var low: Dictionary = gen.sample_surface(d.rotated(t0, 3000.0 / R))
+			if float(s.height) < 400.0 or float(s.height) > 1000.0 or float(low.height) < 20.0 or float(low.moisture) < 0.45 \
+					or float(low.temperature) < 0.3 or float(low.temperature) > 0.75:
+				continue
+			score = float(s.height) - float(low.height)
+		elif biome == "cliff":
 			if float(s.landform) < 0.8:
 				continue
 			score = _relief(gen, d, 60.0)
@@ -68,7 +77,12 @@ func _initialize() -> void:
 	var ground := R + float(s0.height)
 	var cam_pos: Vector3
 	var look: Vector3
-	if biome == "cliff":
+	if biome == "vista":
+		# Toward the lowland sampled during selection (d rotated about t), ~5 degrees down
+		var toward := (up.rotated(t, 3000.0 / R) - up).normalized()
+		cam_pos = up * (ground + 40.0)
+		look = toward * 1000.0 - up * 90.0
+	elif biome == "cliff":
 		# Stand off along the downhill direction, look back at the face
 		var down_dir := t
 		var lowest := INF
@@ -129,11 +143,50 @@ func _process(_d: float) -> bool:
 		last_sig = sig
 		stable_since = now
 	if (now - stable_since > QUIET_S * 1000 and now - start > 8000) or now - start > 120000:
+		# Once settled: average GPU time and triangle count over 120 frames before saving
+		var vp := root.get_viewport_rid()
+		if gpu_ms.is_empty():
+			RenderingServer.viewport_set_measure_render_time(vp, true)
+		gpu_ms.append(RenderingServer.viewport_get_measured_render_time_gpu(vp))
+		if gpu_ms.size() < 120:
+			return false
+		var tris := RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
+		var calls := RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
+		var sum := 0.0
+		for ms in gpu_ms.slice(20):
+			sum += ms
+		print("CAPTURE perf: gpu %.2f ms, %d primitives, %d draw calls" % [sum / (gpu_ms.size() - 20), tris, calls])
 		root.get_viewport().get_texture().get_image().save_png(args.get("out", "res://_foliage_capture.png"))
+		var gi = foliage.library.get_item(foliage.library.get_all_item_ids()[0])
+		var gg: VoxelInstanceGenerator = gi.generator
+		print("ITEM ", gi.name, " lod=", gi.lod_index, " density=", gg.density, " slope=", gg.min_slope_degrees, "-", gg.max_slope_degrees, " mats=", gg.voxel_texture_filter_array, " filt=", gg.voxel_texture_filter_enabled, " temp=", gg.temperature_range, " moist=", gg.moisture_range, " surf=", gg.surface_filter_enabled, " scale=", gg.min_scale, "-", gg.max_scale)
 		var nonzero := {}
+		var tiers := {}
+		var tier_tris := {}
 		for k in counts:
 			if counts[k] > 0:
-				nonzero[foliage.library.get_item(k).name] = counts[k]
-		print("CAPTURE saved; instances by layer: ", nonzero)
+				var n: String = foliage.library.get_item(k).name
+				nonzero[n] = counts[k]
+				var tier := "far" + n.get_slice("_far", 1).get_slice("_", 0) if n.contains("_far") else "near"
+				tiers[tier] = tiers.get(tier, 0) + counts[k]
+				var it: VoxelInstanceLibraryMultiMeshItem = foliage.library.get_item(k)
+				var m: Mesh = it.get_mesh(1) if tier != "near" else it.mesh
+				var tri_key := tier + " " + n.get_slice("/", 0) + "/" + n.get_slice("/", 1).get_slice("_", 0)
+				tier_tris[tri_key] = tier_tris.get(tri_key, 0) + counts[k] * _tris(m)
+		print("CAPTURE instances by tier: ", tiers)
+		var keys := tier_tris.keys()
+		keys.sort_custom(func(a, b): return tier_tris[a] > tier_tris[b])
+		for key in keys.slice(0, 15):
+			print("CAPTURE tris %s: %d" % [key, tier_tris[key]])
+		print("CAPTURE saved; library items=%d config=%s; instances by layer: " % [foliage.library.get_all_item_ids().size() if foliage.library else -1, foliage.get("config")], nonzero)
 		return true
 	return false
+
+
+func _tris(m: Mesh) -> int:
+	var n := 0
+	for s in m.get_surface_count():
+		var a := m.surface_get_arrays(s)
+		var idx = a[Mesh.ARRAY_INDEX]
+		n += (idx.size() if idx is PackedInt32Array and idx.size() > 0 else a[Mesh.ARRAY_VERTEX].size()) / 3
+	return n

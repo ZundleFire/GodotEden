@@ -1268,6 +1268,19 @@ void Image::resize(int p_width, int p_height, Interpolation p_interpolation) {
 		return;
 	}
 
+	// RGBE9995 is a packed shared-exponent format: none of the byte/half/float scalers below
+	// understand its bit layout, and it falls outside every format range they check (it sits
+	// numerically between RGBAH and R16). Left unhandled, the switch below matches nothing and
+	// resize() silently returns an image of all-zero pixels -- which is exactly what happens to
+	// an HDR panorama whose import shrinks it via process/size_limit. Converting through RGBAF
+	// reuses the already-correct float scalers instead of teaching them a new packed format.
+	if (format == FORMAT_RGBE9995) {
+		convert(FORMAT_RGBAF);
+		resize(p_width, p_height, p_interpolation);
+		convert(FORMAT_RGBE9995);
+		return;
+	}
+
 	Image dst(p_width, p_height, false, format);
 
 	// Setup mipmap-aware scaling

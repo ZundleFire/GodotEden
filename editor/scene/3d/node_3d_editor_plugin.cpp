@@ -591,15 +591,23 @@ void Node3DEditorViewport::_update_camera(real_t p_interp_delta) {
 			camera_cursor.eye_pos = old_camera_cursor.eye_pos.lerp(cursor.eye_pos, CLAMP(factor, 0, 1));
 
 			const real_t orbit_inertia = EDITOR_GET("editors/3d/navigation_feel/orbit_inertia");
-			camera_cursor.x_rot = Math::lerp(old_camera_cursor.x_rot, cursor.x_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
-			camera_cursor.y_rot = Math::lerp(old_camera_cursor.y_rot, cursor.y_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
+			if (six_dof_mode) {
+				real_t slerp_factor = MIN(1.f, p_interp_delta * (1 / orbit_inertia));
+				camera_cursor.six_dof_orientation = old_camera_cursor.six_dof_orientation.slerp(cursor.six_dof_orientation, slerp_factor).normalized();
+				if (camera_cursor.six_dof_orientation.angle_to(cursor.six_dof_orientation) < Math::deg_to_rad(0.1)) {
+					camera_cursor.six_dof_orientation = cursor.six_dof_orientation;
+				}
+			} else {
+				camera_cursor.x_rot = Math::lerp(old_camera_cursor.x_rot, cursor.x_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
+				camera_cursor.y_rot = Math::lerp(old_camera_cursor.y_rot, cursor.y_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
 
-			if (Math::abs(camera_cursor.x_rot - cursor.x_rot) < 0.1) {
-				camera_cursor.x_rot = cursor.x_rot;
-			}
+				if (Math::abs(camera_cursor.x_rot - cursor.x_rot) < 0.1) {
+					camera_cursor.x_rot = cursor.x_rot;
+				}
 
-			if (Math::abs(camera_cursor.y_rot - cursor.y_rot) < 0.1) {
-				camera_cursor.y_rot = cursor.y_rot;
+				if (Math::abs(camera_cursor.y_rot - cursor.y_rot) < 0.1) {
+					camera_cursor.y_rot = cursor.y_rot;
+				}
 			}
 
 			Vector3 forward = to_camera_transform(camera_cursor).basis.xform(Vector3(0, 0, -1));
@@ -610,15 +618,23 @@ void Node3DEditorViewport::_update_camera(real_t p_interp_delta) {
 			const real_t translation_inertia = EDITOR_GET("editors/3d/navigation_feel/translation_inertia");
 			const real_t zoom_inertia = EDITOR_GET("editors/3d/navigation_feel/zoom_inertia");
 
-			camera_cursor.x_rot = Math::lerp(old_camera_cursor.x_rot, cursor.x_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
-			camera_cursor.y_rot = Math::lerp(old_camera_cursor.y_rot, cursor.y_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
+			if (six_dof_mode) {
+				real_t slerp_factor = MIN(1.f, p_interp_delta * (1 / orbit_inertia));
+				camera_cursor.six_dof_orientation = old_camera_cursor.six_dof_orientation.slerp(cursor.six_dof_orientation, slerp_factor).normalized();
+				if (camera_cursor.six_dof_orientation.angle_to(cursor.six_dof_orientation) < Math::deg_to_rad(0.1)) {
+					camera_cursor.six_dof_orientation = cursor.six_dof_orientation;
+				}
+			} else {
+				camera_cursor.x_rot = Math::lerp(old_camera_cursor.x_rot, cursor.x_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
+				camera_cursor.y_rot = Math::lerp(old_camera_cursor.y_rot, cursor.y_rot, MIN(1.f, p_interp_delta * (1 / orbit_inertia)));
 
-			if (Math::abs(camera_cursor.x_rot - cursor.x_rot) < 0.1) {
-				camera_cursor.x_rot = cursor.x_rot;
-			}
+				if (Math::abs(camera_cursor.x_rot - cursor.x_rot) < 0.1) {
+					camera_cursor.x_rot = cursor.x_rot;
+				}
 
-			if (Math::abs(camera_cursor.y_rot - cursor.y_rot) < 0.1) {
-				camera_cursor.y_rot = cursor.y_rot;
+				if (Math::abs(camera_cursor.y_rot - cursor.y_rot) < 0.1) {
+					camera_cursor.y_rot = cursor.y_rot;
+				}
 			}
 
 			camera_cursor.pos = old_camera_cursor.pos.lerp(cursor.pos, MIN(1.f, p_interp_delta * (1 / translation_inertia)));
@@ -629,13 +645,18 @@ void Node3DEditorViewport::_update_camera(real_t p_interp_delta) {
 	//-------
 	// Apply camera transform
 
-	// Position uses an absolute tolerance (0.1 mm): Vector3::is_equal_approx is relative to the magnitude, so far
-	// from the origin (e.g. on a 40 km planet) it treated every sub-0.4 m freelook step as "no change" and skipped it.
 	real_t tolerance = 0.001;
 	bool equal = true;
-	if (!Math::is_equal_approx(old_camera_cursor.x_rot, camera_cursor.x_rot, tolerance) || !Math::is_equal_approx(old_camera_cursor.y_rot, camera_cursor.y_rot, tolerance)) {
+	if (six_dof_mode) {
+		if (!old_camera_cursor.six_dof_orientation.is_equal_approx(camera_cursor.six_dof_orientation)) {
+			equal = false;
+		}
+	} else if (!Math::is_equal_approx(old_camera_cursor.x_rot, camera_cursor.x_rot, tolerance) || !Math::is_equal_approx(old_camera_cursor.y_rot, camera_cursor.y_rot, tolerance)) {
 		equal = false;
-	} else if (old_camera_cursor.pos.distance_squared_to(camera_cursor.pos) > 1e-8) {
+	}
+	// Absolute tolerance (0.1 mm): Vector3::is_equal_approx is relative to the magnitude, so far from the
+	// origin (e.g. on a 40 km planet) it treated every sub-0.4 m freelook step as "no change" and skipped the update.
+	if (equal && old_camera_cursor.pos.distance_squared_to(camera_cursor.pos) > 1e-8) {
 		equal = false;
 	} else if (!Math::is_equal_approx(old_camera_cursor.distance, camera_cursor.distance, tolerance)) {
 		equal = false;
@@ -666,8 +687,12 @@ void Node3DEditorViewport::_update_camera(real_t p_interp_delta) {
 Transform3D Node3DEditorViewport::to_camera_transform(const Cursor &p_cursor) const {
 	Transform3D camera_transform;
 	camera_transform.translate_local(p_cursor.pos);
-	camera_transform.basis.rotate(Vector3(1, 0, 0), -p_cursor.x_rot);
-	camera_transform.basis.rotate(Vector3(0, 1, 0), -p_cursor.y_rot);
+	if (six_dof_mode) {
+		camera_transform.basis = Basis(p_cursor.six_dof_orientation);
+	} else {
+		camera_transform.basis.rotate(Vector3(1, 0, 0), -p_cursor.x_rot);
+		camera_transform.basis.rotate(Vector3(0, 1, 0), -p_cursor.y_rot);
+	}
 
 	if (orthogonal) {
 		camera_transform.translate_local(0, 0, (get_zfar() - get_znear()) / 2.0);
@@ -990,8 +1015,12 @@ Vector3 Node3DEditorViewport::_get_screen_to_space(const Vector3 &p_vector3) {
 
 	Transform3D camera_transform;
 	camera_transform.translate_local(cursor.pos);
-	camera_transform.basis.rotate(Vector3(1, 0, 0), -cursor.x_rot);
-	camera_transform.basis.rotate(Vector3(0, 1, 0), -cursor.y_rot);
+	if (six_dof_mode) {
+		camera_transform.basis = Basis(cursor.six_dof_orientation);
+	} else {
+		camera_transform.basis.rotate(Vector3(1, 0, 0), -cursor.x_rot);
+		camera_transform.basis.rotate(Vector3(0, 1, 0), -cursor.y_rot);
+	}
 	camera_transform.translate_local(0, 0, cursor.distance);
 
 	return camera_transform.xform(Vector3(((p_vector3.x / get_size().width) * 2.0 - 1.0) * screen_he.x, ((1.0 - (p_vector3.y / get_size().height)) * 2.0 - 1.0) * screen_he.y, -(get_znear() + p_vector3.z)));
@@ -2666,6 +2695,13 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 		if (ED_IS_SHORTCUT("spatial_editor/align_rotation_with_view", event_mod)) {
 			_menu_option(VIEW_ALIGN_ROTATION_WITH_VIEW);
 		}
+		// Unlike its neighbors above, VIEW_ALIGN_UP was previously only reachable via the View
+		// menu item's own accelerator, not through key input directly -- the popup's own shortcut
+		// dispatch does not fire while the menu isn't open, so this explicit check (matching every
+		// sibling view shortcut in this function) is what actually makes Home / Shift+R work.
+		if (ED_IS_SHORTCUT("spatial_editor/align_up", event_mod)) {
+			_menu_option(VIEW_ALIGN_UP);
+		}
 		if (ED_IS_SHORTCUT("spatial_editor/insert_anim_key", event_mod)) {
 			if (!get_selected_count() || _edit.mode != TRANSFORM_NONE) {
 				return;
@@ -2812,8 +2848,12 @@ void Node3DEditorViewport::_nav_pan(Ref<InputEventWithModifiers> p_event, const 
 	Transform3D camera_transform;
 
 	camera_transform.translate_local(cursor.pos);
-	camera_transform.basis.rotate(Vector3(1, 0, 0), -cursor.x_rot);
-	camera_transform.basis.rotate(Vector3(0, 1, 0), -cursor.y_rot);
+	if (six_dof_mode) {
+		camera_transform.basis = Basis(cursor.six_dof_orientation);
+	} else {
+		camera_transform.basis.rotate(Vector3(1, 0, 0), -cursor.x_rot);
+		camera_transform.basis.rotate(Vector3(0, 1, 0), -cursor.y_rot);
+	}
 	const bool invert_x_axis = EDITOR_GET("editors/3d/navigation/invert_x_axis");
 	const bool invert_y_axis = EDITOR_GET("editors/3d/navigation/invert_y_axis");
 	Vector3 translation(
@@ -2852,6 +2892,32 @@ void Node3DEditorViewport::_nav_zoom(Ref<InputEventWithModifiers> p_event, const
 void Node3DEditorViewport::_nav_orbit(Ref<InputEventWithModifiers> p_event, const Vector2 &p_relative) {
 	if (lock_rotation) {
 		_nav_pan(p_event, p_relative);
+		return;
+	}
+
+	if (six_dof_mode) {
+		const real_t degrees_per_pixel = EDITOR_GET("editors/3d/navigation_feel/orbit_sensitivity");
+		const real_t radians_per_pixel = Math::deg_to_rad(degrees_per_pixel);
+		const bool invert_y_axis = EDITOR_GET("editors/3d/navigation/invert_y_axis");
+		const bool invert_x_axis = EDITOR_GET("editors/3d/navigation/invert_x_axis");
+
+		Vector3 local_right = cursor.six_dof_orientation.xform(Vector3(1, 0, 0));
+		Vector3 local_up = cursor.six_dof_orientation.xform(Vector3(0, 1, 0));
+
+		real_t pitch_delta = p_relative.y * radians_per_pixel * (invert_y_axis ? -1 : 1);
+		real_t yaw_delta = p_relative.x * radians_per_pixel * (invert_x_axis ? -1 : 1);
+
+		Quaternion pitch_q(local_right, -pitch_delta);
+		Quaternion yaw_q(local_up, -yaw_delta);
+		cursor.six_dof_orientation = (yaw_q * pitch_q * cursor.six_dof_orientation).normalized();
+
+		// cursor.pos is the fixed pivot in orbit mode; to_camera_transform() derives the
+		// eye from pos + distance along local -Z, so no further recomputation is needed.
+
+		view_type = VIEW_TYPE_USER;
+		if (orthogonal && auto_orthogonal) {
+			_menu_option(VIEW_PERSPECTIVE);
+		}
 		return;
 	}
 
@@ -2939,17 +3005,36 @@ void Node3DEditorViewport::_nav_look(Ref<InputEventWithModifiers> p_event, const
 	// Note: do NOT assume the camera has the "current" transform, because it is interpolated and may have "lag".
 	const Transform3D prev_camera_transform = to_camera_transform(cursor);
 
-	if (invert_y_axis) {
-		cursor.x_rot -= p_relative.y * radians_per_pixel;
-	} else {
-		cursor.x_rot += p_relative.y * radians_per_pixel;
-	}
-	// Clamp the Y rotation to roughly -90..90 degrees so the user can't look upside-down and end up disoriented.
-	cursor.x_rot = CLAMP(cursor.x_rot, -1.57, 1.57);
-	cursor.unsnapped_x_rot = cursor.x_rot;
+	if (six_dof_mode) {
+		Vector3 local_right = cursor.six_dof_orientation.xform(Vector3(1, 0, 0));
+		Vector3 local_up = cursor.six_dof_orientation.xform(Vector3(0, 1, 0));
 
-	cursor.y_rot += p_relative.x * radians_per_pixel;
-	cursor.unsnapped_y_rot = cursor.y_rot;
+		real_t pitch_delta = (invert_y_axis ? -1 : 1) * p_relative.y * radians_per_pixel;
+		real_t yaw_delta = p_relative.x * radians_per_pixel;
+
+		// Negate pitch_delta here, matching _nav_orbit's six_dof branch just above: both need the
+		// same sign as the stock (non-6DOF) path's `cursor.x_rot += p_relative.y * ...`, which
+		// then gets applied to the camera basis as `rotate(X, -x_rot)` -- i.e. the *effective*
+		// rotation angle is the negative of the raw mouse delta. Omitting this negation (as an
+		// earlier version of this function did) inverted pitch: moving the mouse down looked up
+		// and vice versa.
+		Quaternion pitch_q(local_right, -pitch_delta);
+		Quaternion yaw_q(local_up, -yaw_delta);
+		cursor.six_dof_orientation = (yaw_q * pitch_q * cursor.six_dof_orientation).normalized();
+		// No pitch clamp: 6DOF mode allows looking freely past the poles.
+	} else {
+		if (invert_y_axis) {
+			cursor.x_rot -= p_relative.y * radians_per_pixel;
+		} else {
+			cursor.x_rot += p_relative.y * radians_per_pixel;
+		}
+		// Clamp the Y rotation to roughly -90..90 degrees so the user can't look upside-down and end up disoriented.
+		cursor.x_rot = CLAMP(cursor.x_rot, -1.57, 1.57);
+		cursor.unsnapped_x_rot = cursor.x_rot;
+
+		cursor.y_rot += p_relative.x * radians_per_pixel;
+		cursor.unsnapped_y_rot = cursor.y_rot;
+	}
 
 	// Look is like the opposite of Orbit: the focus point rotates around the camera
 	Transform3D camera_transform = to_camera_transform(cursor);
@@ -3002,6 +3087,152 @@ void Node3DEditorViewport::set_freelook_active(bool active_now) {
 	}
 
 	freelook_active = active_now;
+}
+
+void Node3DEditorViewport::_sync_six_dof_orientation_from_euler() {
+	Basis stock_basis;
+	stock_basis.rotate(Vector3(1, 0, 0), -cursor.x_rot);
+	stock_basis.rotate(Vector3(0, 1, 0), -cursor.y_rot);
+	cursor.six_dof_orientation = stock_basis.get_rotation_quaternion();
+}
+
+void Node3DEditorViewport::set_six_dof_mode(bool p_active) {
+	if (p_active == six_dof_mode) {
+		return;
+	}
+
+	// Sync camera cursor to cursor to "cut" interpolation jumps due to changing referential.
+	cursor = camera_cursor;
+
+	if (p_active) {
+		six_dof_mode = true;
+		// Convert the current pitch/yaw Euler state into an equivalent quaternion,
+		// reproducing exactly what to_camera_transform()'s stock branch would have built.
+		_sync_six_dof_orientation_from_euler();
+
+		// Sync eye_pos the same way freelook does, now that to_camera_transform() will use the quaternion.
+		Vector3 forward = to_camera_transform(cursor).basis.xform(Vector3(0, 0, -1));
+		cursor.eye_pos = cursor.pos - cursor.distance * forward;
+	} else {
+		// Decompose the quaternion back into pitch/yaw, matching the X-then-Y application
+		// order used by the stock path, then restore the stock pitch clamp invariant.
+		Vector3 euler = Basis(cursor.six_dof_orientation).get_euler(EulerOrder::YXZ);
+		cursor.x_rot = CLAMP(-euler.x, -1.57, 1.57);
+		cursor.y_rot = -euler.y;
+		cursor.unsnapped_x_rot = cursor.x_rot;
+		cursor.unsnapped_y_rot = cursor.y_rot;
+
+		six_dof_mode = false;
+	}
+
+	camera_cursor = cursor;
+	surface->queue_redraw();
+}
+
+void Node3DEditorViewport::_update_six_dof_roll(real_t p_delta) {
+	if (!six_dof_mode) {
+		return;
+	}
+
+	Input *inp = Input::get_singleton();
+	// Roll is Shift+Q/E, and Shift is also the speed modifier, so the old 3x boost always applied (270 deg/s)
+	real_t roll_speed = Math::deg_to_rad(45.0);
+	if (inp->is_action_pressed("spatial_editor/freelook_slow_modifier")) {
+		roll_speed *= 0.333;
+	}
+
+	// Roll direction was backwards: "left" (rolling so the horizon tilts counter-clockwise from
+	// the pilot's view) needs a negative rotation about the forward axis in Godot's right-handed
+	// basis, not positive -- the signs below were flipped from the original version.
+	real_t roll_delta = 0.0;
+	if (inp->is_action_pressed("spatial_editor/roll_left")) {
+		roll_delta -= roll_speed * p_delta;
+	}
+	if (inp->is_action_pressed("spatial_editor/roll_right")) {
+		roll_delta += roll_speed * p_delta;
+	}
+	if (roll_delta == 0.0) {
+		return;
+	}
+
+	Vector3 local_forward = cursor.six_dof_orientation.xform(Vector3(0, 0, -1));
+	Quaternion roll_q(local_forward, roll_delta);
+	cursor.six_dof_orientation = (roll_q * cursor.six_dof_orientation).normalized();
+}
+
+void Node3DEditorViewport::_set_sphere_align(bool p_active) {
+	sphere_align = p_active;
+	if (!p_active) {
+		return;
+	}
+	sphere_align_node = ObjectID();
+	String center_name = TTR("world origin");
+	const List<Node *> &selection = editor_selection->get_top_selected_node_list();
+	if (!selection.is_empty()) {
+		if (Node3D *n = Object::cast_to<Node3D>(selection.front()->get())) {
+			sphere_align_node = n->get_instance_id();
+			center_name = n->get_name();
+		}
+	}
+	sphere_align_toggle->set_tooltip_text(vformat(TTR("Camera up follows the sphere around: %s.\nSelect a node before enabling to use its origin as the centre."), center_name));
+	if (!six_dof_mode) {
+		six_dof_toggle->set_pressed(true); // alignment is a 6DOF feature
+	}
+	sphere_align_prev_up = Vector3();
+}
+
+void Node3DEditorViewport::_update_sphere_align() {
+	if (!sphere_align || !six_dof_mode) {
+		return;
+	}
+	Vector3 center;
+	if (sphere_align_node.is_valid()) {
+		Node3D *n = ObjectDB::get_instance<Node3D>(sphere_align_node);
+		if (n != nullptr && n->is_inside_tree()) {
+			center = n->get_global_position();
+		}
+	}
+	// Radial at the camera while flying; at the orbit pivot otherwise. Orbiting moves the camera when the
+	// orientation changes, so measuring there would feed back into itself.
+	const bool flying = is_freelook_active();
+	const Vector3 prev_camera_pos = to_camera_transform(cursor).origin;
+	const Vector3 reference = flying ? prev_camera_pos : cursor.pos;
+	const Vector3 up = reference - center;
+	if (up.length_squared() < CMP_EPSILON) {
+		return;
+	}
+	const Vector3 radial = up.normalized();
+	if (sphere_align_prev_up != Vector3() && !sphere_align_prev_up.is_equal_approx(radial)) {
+		// Carry the orientation along with the surface, so the pitch against the local horizon is kept
+		cursor.six_dof_orientation = (Quaternion(sphere_align_prev_up, radial) * cursor.six_dof_orientation).normalized();
+	}
+	sphere_align_prev_up = radial;
+
+	const Vector3 forward = cursor.six_dof_orientation.xform(Vector3(0, 0, -1));
+	if (Math::abs(forward.dot(radial)) < 0.999) { // looking straight up/down has no level roll
+		cursor.six_dof_orientation = Basis::looking_at(forward, radial).get_rotation_quaternion();
+	}
+	if (flying) {
+		// Like _nav_look: the camera stays put, the focus point turns around it
+		const Vector3 diff = prev_camera_pos - to_camera_transform(cursor).origin;
+		cursor.pos += diff;
+		cursor.eye_pos = prev_camera_pos;
+	}
+}
+
+void Node3DEditorViewport::_align_up() {
+	if (!six_dof_mode) {
+		return;
+	}
+
+	Vector3 forward = cursor.six_dof_orientation.xform(Vector3(0, 0, -1));
+	if (Math::abs(forward.dot(Vector3(0, 1, 0))) > 0.999) {
+		// Degenerate: looking straight up/down, there is no well-defined level roll.
+		return;
+	}
+
+	Basis leveled = Basis::looking_at(-forward, Vector3(0, 1, 0));
+	cursor.six_dof_orientation = leveled.get_rotation_quaternion();
 }
 
 void Node3DEditorViewport::scale_fov(real_t p_fov_offset) {
@@ -3073,7 +3304,8 @@ void Node3DEditorViewport::_update_freelook(real_t delta) {
 		return;
 	}
 
-	const FreelookNavigationScheme navigation_scheme = (FreelookNavigationScheme)EDITOR_GET("editors/3d/freelook/freelook_navigation_scheme").operator int();
+	// In 6DOF mode there is no fixed world-up, so always use the basis-relative (unlocked) scheme.
+	const FreelookNavigationScheme navigation_scheme = six_dof_mode ? FREELOOK_DEFAULT : (FreelookNavigationScheme)EDITOR_GET("editors/3d/freelook/freelook_navigation_scheme").operator int();
 
 	Vector3 forward;
 	if (navigation_scheme == FREELOOK_FULLY_AXIS_LOCKED) {
@@ -3112,10 +3344,15 @@ void Node3DEditorViewport::_update_freelook(real_t delta) {
 	if (inp->is_action_pressed("spatial_editor/freelook_backwards")) {
 		direction -= forward;
 	}
-	if (inp->is_action_pressed("spatial_editor/freelook_up")) {
+	// In 6DOF mode, Shift+Q/E are also the roll shortcuts (see _update_six_dof_roll); is_action_pressed
+	// ignores modifiers by default, so a bare Q/E check here would ALSO move the camera vertically
+	// every time the user is trying to roll. Suppress the vertical contribution specifically when
+	// Shift is held while flying in 6DOF, leaving plain Q/E free to move up/down as before.
+	const bool six_dof_rolling = six_dof_mode && inp->is_action_pressed("spatial_editor/freelook_speed_modifier");
+	if (inp->is_action_pressed("spatial_editor/freelook_up") && !six_dof_rolling) {
 		direction += up;
 	}
-	if (inp->is_action_pressed("spatial_editor/freelook_down")) {
+	if (inp->is_action_pressed("spatial_editor/freelook_down") && !six_dof_rolling) {
 		direction -= up;
 	}
 
@@ -3332,6 +3569,8 @@ void Node3DEditorViewport::_notification(int p_what) {
 			}
 
 			_update_freelook(delta);
+			_update_six_dof_roll(delta);
+			_update_sphere_align();
 
 			Node *scene_root = SceneTreeDock::get_singleton()->get_editor_data()->get_edited_scene_root();
 			if (previewing_cinema && scene_root != nullptr) {
@@ -3972,6 +4211,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.x_rot = Math::PI / 2.0;
 			cursor.unsnapped_y_rot = cursor.y_rot;
 			cursor.unsnapped_x_rot = cursor.x_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Top View."), 2);
 			view_type = VIEW_TYPE_TOP;
 			_set_auto_orthogonal();
@@ -3983,6 +4225,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.x_rot = -Math::PI / 2.0;
 			cursor.unsnapped_y_rot = cursor.y_rot;
 			cursor.unsnapped_x_rot = cursor.x_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Bottom View."), 2);
 			view_type = VIEW_TYPE_BOTTOM;
 			_set_auto_orthogonal();
@@ -3994,6 +4239,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.y_rot = Math::PI / 2.0;
 			cursor.unsnapped_x_rot = cursor.x_rot;
 			cursor.unsnapped_y_rot = cursor.y_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Left View."), 2);
 			view_type = VIEW_TYPE_LEFT;
 			_set_auto_orthogonal();
@@ -4005,6 +4253,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.y_rot = -Math::PI / 2.0;
 			cursor.unsnapped_x_rot = cursor.x_rot;
 			cursor.unsnapped_y_rot = cursor.y_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Right View."), 2);
 			view_type = VIEW_TYPE_RIGHT;
 			_set_auto_orthogonal();
@@ -4016,6 +4267,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.y_rot = 0;
 			cursor.unsnapped_x_rot = cursor.x_rot;
 			cursor.unsnapped_y_rot = cursor.y_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Front View."), 2);
 			view_type = VIEW_TYPE_FRONT;
 			_set_auto_orthogonal();
@@ -4027,6 +4281,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			cursor.y_rot = Math::PI;
 			cursor.unsnapped_x_rot = cursor.x_rot;
 			cursor.unsnapped_y_rot = cursor.y_rot;
+			if (six_dof_mode) {
+				_sync_six_dof_orientation_from_euler();
+			}
 			set_message(TTR("Rear View."), 2);
 			view_type = VIEW_TYPE_REAR;
 			_set_auto_orthogonal();
@@ -4120,6 +4377,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			}
 			undo_redo->commit_action();
 
+		} break;
+		case VIEW_ALIGN_UP: {
+			_align_up();
 		} break;
 		case VIEW_ENVIRONMENT: {
 			int idx = view_display_menu->get_popup()->get_item_index(VIEW_ENVIRONMENT);
@@ -6255,6 +6515,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	view_display_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("spatial_editor/focus_selection"), VIEW_CENTER_TO_SELECTION);
 	view_display_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("spatial_editor/align_transform_with_view"), VIEW_ALIGN_TRANSFORM_WITH_VIEW);
 	view_display_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("spatial_editor/align_rotation_with_view"), VIEW_ALIGN_ROTATION_WITH_VIEW);
+	view_display_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("spatial_editor/align_up"), VIEW_ALIGN_UP);
 	view_display_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_menu_option));
 	display_submenu->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_menu_option));
 	view_display_menu->set_disable_shortcuts(true);
@@ -6277,6 +6538,12 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	register_shortcut_action("spatial_editor/freelook_down", TTRC("Freelook Down"), Key::Q, true);
 	register_shortcut_action("spatial_editor/freelook_speed_modifier", TTRC("Freelook Speed Modifier"), Key::SHIFT);
 	register_shortcut_action("spatial_editor/freelook_slow_modifier", TTRC("Freelook Slow Modifier"), Key::ALT);
+
+	// Shift+Q/E rather than bare Q/E: those are already freelook_down/freelook_up, and reusing
+	// the same modifier freelook_speed_modifier already uses as "roll instead of move vertically"
+	// keeps the mnemonic (Q/E = vertical axis) instead of introducing unrelated keys.
+	register_shortcut_action("spatial_editor/roll_left", TTRC("Roll Left"), KeyModifierMask::SHIFT | Key::Q, true);
+	register_shortcut_action("spatial_editor/roll_right", TTRC("Roll Right"), KeyModifierMask::SHIFT | Key::E, true);
 
 	ED_SHORTCUT("spatial_editor/lock_transform_x", TTRC("Lock Transformation to X axis"), Key::X);
 	ED_SHORTCUT("spatial_editor/lock_transform_y", TTRC("Lock Transformation to Y axis"), Key::Y);
@@ -6306,6 +6573,21 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	preview_camera->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::_toggle_camera_preview));
 	previewing = nullptr;
 	gizmo_scale = 1.0;
+
+	six_dof_toggle = memnew(CheckBox);
+	six_dof_toggle->set_text(TTRC("6DOF"));
+	six_dof_toggle->set_shortcut(ED_SHORTCUT("spatial_editor/six_dof_toggle", TTRC("Toggle 6DOF Camera"), KeyModifierMask::SHIFT | Key::F6));
+	six_dof_toggle->set_tooltip_text(TTRC("Toggle a free-orientation camera with no fixed world-up axis. Orbit, freelook and roll are all unlocked while active."));
+	vbox->add_child(six_dof_toggle);
+	six_dof_toggle->set_h_size_flags(0);
+	six_dof_toggle->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::set_six_dof_mode));
+
+	sphere_align_toggle = memnew(CheckBox);
+	sphere_align_toggle->set_text(TTRC("Align to Planet"));
+	sphere_align_toggle->set_tooltip_text(TTRC("6DOF: keep the camera's up pointing away from a sphere centre while flying, so the horizon stays level.\nSelect the planet node before enabling to use its origin; otherwise the world origin is used."));
+	vbox->add_child(sphere_align_toggle);
+	sphere_align_toggle->set_h_size_flags(0);
+	sphere_align_toggle->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::_set_sphere_align));
 
 	preview_node = nullptr;
 
@@ -9953,6 +10235,8 @@ Node3DEditor::Node3DEditor() {
 			{ int32_t(KeyModifierMask::ALT | KeyModifierMask::META | Key::KP_0),
 					int32_t(KeyModifierMask::ALT | KeyModifierMask::META | Key::G) });
 	ED_SHORTCUT("spatial_editor/align_rotation_with_view", TTRC("Align Rotation with View"), KeyModifierMask::ALT + KeyModifierMask::CMD_OR_CTRL + Key::F);
+	ED_SHORTCUT_ARRAY("spatial_editor/align_up", TTRC("Align Camera Up with World"),
+			{ int32_t(Key::HOME), int32_t(KeyModifierMask::SHIFT | Key::R) });
 	ED_SHORTCUT("spatial_editor/freelook_toggle", TTRC("Toggle Freelook"), KeyModifierMask::SHIFT + Key::F);
 	ED_SHORTCUT("spatial_editor/decrease_fov", TTRC("Decrease Field of View"), KeyModifierMask::CMD_OR_CTRL + Key::EQUAL); // Usually direct access key for `KEY_PLUS`.
 	ED_SHORTCUT("spatial_editor/increase_fov", TTRC("Increase Field of View"), KeyModifierMask::CMD_OR_CTRL + Key::MINUS);

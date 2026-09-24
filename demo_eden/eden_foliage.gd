@@ -1,54 +1,44 @@
 @tool
 class_name EdenFoliage
 extends VoxelInstancer
-## Low-poly GPU foliage for a VoxelLodTerrain planet (EdenPlanetGeneratorV4): grass, biome trees, bushes, ground
-## scatter (pebbles, rocks, boulders, fallen branches and logs) and rocks on cliffs, all MultiMesh.
+## Low-poly GPU foliage for a VoxelLodTerrain planet (EdenPlanetGeneratorV4), all MultiMesh. What spawns where is
+## data: an EdenFoliageConfig of biomes (climate / slope / material regions), each with layers (trees, bushes, grass,
+## rocks, wood) and their density, size range and placement. Edit it in the inspector; the foliage rebuilds.
 ## VoxelLodTerrain allows only ONE VoxelInstancer, so every layer is an item in this node's library.
 ##
-## Biomes come from the terrain's surface data (mesher surface_data_enabled): each layer keeps a temperature and
-## moisture range (VoxelInstanceGenerator surface filter) plus the MIXEL4 materials it grows on. Climate values follow
-## latitude on the V4 planet: ~0.9 equator, ~0.75 subtropics, ~0.4 mid latitudes, ~0.15 subarctic, ~0 poles.
-##
-## The library is generated, never saved: it is detached around editor saves and rebuilt whenever an export changes.
-## Trunks, logs, boulders and cliff rocks collide near the camera (not in the editor); plants sway, with wind (and
-## grass itself, at its range edge) fading out with camera distance.
+## Biomes read the terrain's surface data (mesher surface_data_enabled) through the VoxelInstanceGenerator climate
+## filter. The library is generated, never saved: it is detached around editor saves.
 ##
 ## ponytail: GDScript prototype. Port to an eden_foliage C++ node once settled.
 
-const MAT_GRASS := 0
-const MAT_ROCK := 1
-const MAT_SNOW := 2
-const MAT_SAND := 3
-const MAT_DIRT := 4
-const MAT_MOSS := 5
-const VEGETATED := [MAT_GRASS, MAT_DIRT, MAT_MOSS]
+## Biomes and their layers. Empty: the built-in default (EdenFoliageConfig.make_default()).
+@export var config: EdenFoliageConfig:
+	set(v):
+		config = v
+		_rebuild()
 
 ## Spawn foliage in the editor viewport too (it follows the editor camera).
 @export var show_in_editor := true:
 	set(v):
 		show_in_editor = v
 		_rebuild()
+## Multiplies every layer's density (quick global thinning for slower machines).
+@export_range(0.0, 4.0, 0.01) var density_scale := 1.0:
+	set(v):
+		density_scale = v
+		_rebuild()
+## Colliders (trunks, logs, rocks) exist only within this camera distance (m). None in the editor.
+@export var collision_distance := 64.0:
+	set(v):
+		collision_distance = v
+		_rebuild()
 
 @export_group("Grass")
-@export var grass_enabled := true:
-	set(v):
-		grass_enabled = v
-		_rebuild()
-## Tufts per m² on lush grass. Only LOD0 terrain chunks get grass.
-@export var grass_density := 8.0:
-	set(v):
-		grass_density = v
-		_rebuild()
 @export var blades_per_tuft := 7:
 	set(v):
 		blades_per_tuft = v
 		_rebuild()
-## Keep below the terrain shader's rock slope (~37°).
-@export var grass_max_slope_degrees := 35.0:
-	set(v):
-		grass_max_slope_degrees = v
-		_rebuild()
-## Grass shrinks into the ground between these camera distances (m), so the range edge doesn't pop.
+## Grass shrinks into the ground between these camera distances (m); whole chunks past the end stop drawing.
 @export var grass_fade_start := 45.0:
 	set(v):
 		grass_fade_start = v
@@ -56,7 +46,7 @@ const VEGETATED := [MAT_GRASS, MAT_DIRT, MAT_MOSS]
 @export var grass_fade_end := 60.0:
 	set(v):
 		grass_fade_end = v
-		_rebuild() # also moves the chunk cutoff
+		_rebuild()
 ## Grass wind stops between these camera distances (m).
 @export var grass_wind_fade_start := 20.0:
 	set(v):
@@ -67,39 +57,29 @@ const VEGETATED := [MAT_GRASS, MAT_DIRT, MAT_MOSS]
 		grass_wind_fade_end = v
 		_update_materials()
 
-@export_group("Trees")
-@export var trees_enabled := true:
+@export_group("Far Foliage")
+## Trees and big rocks stay visible far away as voxelized copies on coarser terrain chunks (per layer: Far LOD).
+@export var far_foliage_enabled := true:
 	set(v):
-		trees_enabled = v
+		far_foliage_enabled = v
 		_rebuild()
-## Trees per m² (LOD1 faces) for a biome's main species; others are scaled from it.
-@export var tree_density := 0.012:
+## Multiplies every layer's far distance.
+@export_range(0.1, 4.0, 0.01) var far_distance_scale := 1.0:
 	set(v):
-		tree_density = v
+		far_distance_scale = v
 		_rebuild()
-## Pre-built shapes per species; each is one draw call per chunk.
-@export var tree_variants := 3:
+## Visibility cap: things are drawn out to this many metres per metre of their size (400 = about 2 px tall at
+## 1080p), so a 2 m rock stops at 800 m while a 20 m tree reaches 8 km.
+@export_range(50.0, 2000.0, 1.0) var far_visibility := 400.0:
 	set(v):
-		tree_variants = v
+		far_visibility = v
 		_rebuild()
-@export var tree_max_slope_degrees := 30.0:
+
+@export_group("Trees & Bushes")
+## Multiplies the size range of every tree layer in every biome (per-layer ranges are in the config).
+@export_range(0.1, 5.0, 0.01, "or_greater") var tree_size_scale := 1.0:
 	set(v):
-		tree_max_slope_degrees = v
-		_rebuild()
-## Terrain LOD whose chunks trees spawn on (0 = only within the full-detail range).
-@export_range(0, 3) var tree_lod := 1:
-	set(v):
-		tree_lod = v
-		_rebuild()
-## Rough size of a forest clump (m); trees thin out between clumps.
-@export var forest_patch_size := 150.0:
-	set(v):
-		forest_patch_size = v
-		_rebuild()
-## Trunk/log/rock colliders exist only within this camera distance (m).
-@export var collision_distance := 64.0:
-	set(v):
-		collision_distance = v
+		tree_size_scale = v
 		_rebuild()
 @export var tree_wind_fade_start := 60.0:
 	set(v):
@@ -110,32 +90,13 @@ const VEGETATED := [MAT_GRASS, MAT_DIRT, MAT_MOSS]
 		tree_wind_fade_end = v
 		_update_materials()
 
-@export_group("Bushes & Scatter")
-@export var bushes_enabled := true:
-	set(v):
-		bushes_enabled = v
-		_rebuild()
-## Pebbles, rocks, boulders, fallen branches and logs.
-@export var ground_scatter_enabled := true:
-	set(v):
-		ground_scatter_enabled = v
-		_rebuild()
-## Multiplies every bush and ground scatter density.
-@export var scatter_density := 1.0:
-	set(v):
-		scatter_density = v
-		_rebuild()
-## Boulders and spires set into steep rock (cliffs, mountain faces).
-@export var cliff_rocks_enabled := true:
-	set(v):
-		cliff_rocks_enabled = v
-		_rebuild()
-@export var cliff_rock_density := 1.0:
-	set(v):
-		cliff_rock_density = v
-		_rebuild()
+const MAX_INSTANCER_LOD := 7 # VoxelInstancer::MAX_LOD - 1
+const MATERIAL_BITS := 6 # EdenFoliageLayer/Biome material flags: grass, rock, snow, sand, dirt, moss (MIXEL4 ids)
 
 var _grass_materials: Array[ShaderMaterial] = []
+var _ring_materials := {} # [sways, inner, outer] -> ShaderMaterial
+var _signature := 0
+var _next_check_ms := 0
 
 
 func _ready() -> void:
@@ -152,9 +113,48 @@ func _notification(what: int) -> void:
 		_rebuild()
 
 
+# Resource properties don't signal edits made deep inside arrays of sub-resources, so the editor polls a cheap
+# signature of the config and rebuilds when it changes
+func _process(_delta: float) -> void:
+	if not Engine.is_editor_hint() or Time.get_ticks_msec() < _next_check_ms:
+		return
+	_next_check_ms = Time.get_ticks_msec() + 500
+	var s := _config_signature()
+	if s != _signature:
+		_rebuild()
+
+
+func _config_signature() -> int:
+	var values := []
+	var cfg := _get_config()
+	for b in cfg.biomes:
+		if b == null:
+			continue
+		values.append(_resource_values(b))
+		for l in b.layers:
+			if l != null:
+				values.append(_resource_values(l))
+	return hash(values)
+
+
+func _resource_values(r: Resource) -> Array:
+	var out := []
+	for p in r.get_property_list():
+		if p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and p.name != "layers":
+			out.append(r.get(p.name))
+	return out
+
+
+func _get_config() -> EdenFoliageConfig:
+	if config == null:
+		config = EdenFoliageConfig.make_default()
+	return config
+
+
 func _rebuild() -> void:
 	if not is_inside_tree():
 		return # setters fire while the scene loads; _ready builds once
+	_signature = _config_signature()
 	if Engine.is_editor_hint() and not show_in_editor:
 		# Empty, not null: a VoxelInstancer without a library logs an assertion error every frame
 		library = VoxelInstanceLibrary.new()
@@ -162,140 +162,154 @@ func _rebuild() -> void:
 	library = build_library()
 
 
-# Layer ids are fixed per layer (the id seeds instance placement, so toggling one layer must not move the others):
-# grass 0-9, trees 10-59 (species base + variant), bushes 60-89, ground scatter 90-119, cliffs 120-139.
 func build_library() -> VoxelInstanceLibrary:
 	var lib := VoxelInstanceLibrary.new()
 	_grass_materials.clear()
-	var summer := EdenTreeShape.SEASON_SUMMER
-
-	if grass_enabled:
-		# Lush and dry grass split on moisture; dry grass also covers the warm steppe
-		lib.add_item(0, _grass_item("grass_lush", grass_density, Vector2(0.12, 1.0), Vector2(0.35, 1.0),
-				Color(0.16, 0.33, 0.11), Color(0.32, 0.54, 0.20)))
-		lib.add_item(1, _grass_item("grass_dry", grass_density * 0.6, Vector2(0.45, 1.0), Vector2(0.0, 0.38),
-				Color(0.36, 0.33, 0.14), Color(0.66, 0.58, 0.30)))
-
-	if trees_enabled:
-		# [id base, EdenTreeShape type, density weight, temperature, moisture, materials]
-		var species := [
-			[10, EdenTreeShape.TREE_OAK, 0.6, Vector2(0.42, 0.8), Vector2(0.35, 1.0), VEGETATED],
-			[15, EdenTreeShape.TREE_BIRCH, 0.5, Vector2(0.25, 0.6), Vector2(0.4, 1.0), VEGETATED],
-			[20, EdenTreeShape.TREE_PINE, 1.0, Vector2(0.06, 0.45), Vector2(0.25, 1.0), VEGETATED + [MAT_SNOW]],
-			[25, EdenTreeShape.TREE_WILLOW, 0.3, Vector2(0.4, 0.85), Vector2(0.72, 1.0), VEGETATED],
-			[30, EdenTreeShape.TREE_PALM, 0.5, Vector2(0.72, 1.0), Vector2(0.45, 1.0), VEGETATED + [MAT_SAND]],
-			[35, EdenTreeShape.TREE_FRUIT, 0.25, Vector2(0.55, 0.9), Vector2(0.45, 1.0), VEGETATED],
-			[40, EdenTreeShape.TREE_DEAD, 0.08, Vector2(0.45, 1.0), Vector2(0.0, 0.32), VEGETATED + [MAT_SAND]], # dry savanna
-			[45, EdenTreeShape.TREE_DEAD, 0.1, Vector2(0.0, 0.14), Vector2(0.0, 1.0), VEGETATED + [MAT_SNOW]], # tundra edge
-		]
-		for sp in species:
-			for v in tree_variants:
-				var t := EdenFoliageMeshes.tree(sp[1], summer, v)
-				var g := _gen(tree_density * sp[2] / tree_variants, sp[3], sp[4], sp[5], 0.0, tree_max_slope_degrees)
-				g.min_scale = 0.8
-				g.max_scale = 1.3
-				_add_clumping(g, sp[0] + v)
-				var trunk := CapsuleShape3D.new()
-				trunk.radius = t.trunk_radius
-				trunk.height = maxf(t.trunk_height, trunk.radius * 2.0)
-				lib.add_item(sp[0] + v, _item("tree_%d_%d" % [sp[1], v], t.mesh, g, tree_lod,
-						[trunk, Transform3D(Basis(), Vector3(0, trunk.height * 0.5, 0))]))
-
-	if bushes_enabled:
-		# [id base, bush type, variants, density, temperature, moisture, materials, draw distance m]
-		# Every variant is a draw call per chunk, so small things get few variants and a short draw distance
-		var bushes := [
-			[60, EdenBushInstance.BUSH_SHRUB, 2, 0.02, Vector2(0.28, 0.85), Vector2(0.3, 1.0), VEGETATED, 110.0],
-			[65, EdenBushInstance.BUSH_FERN, 1, 0.03, Vector2(0.35, 1.0), Vector2(0.6, 1.0), [MAT_GRASS, MAT_MOSS], 70.0],
-			[70, EdenBushInstance.BUSH_BERRY, 1, 0.006, Vector2(0.35, 0.7), Vector2(0.4, 1.0), VEGETATED, 90.0],
-			[75, EdenBushInstance.BUSH_DEAD, 2, 0.01, Vector2(0.0, 1.0), Vector2(0.0, 0.35), VEGETATED + [MAT_SAND], 110.0],
-			[80, EdenBushInstance.BUSH_CACTUS, 1, 0.004, Vector2(0.7, 1.0), Vector2(0.0, 0.35), [MAT_SAND, MAT_DIRT, MAT_GRASS], 150.0],
-		]
-		for bu in bushes:
-			for v in bu[2]:
-				var g := _gen(bu[3] * scatter_density / bu[2], bu[4], bu[5], bu[6], 0.0, 35.0)
-				g.min_scale = 0.7
-				g.max_scale = 1.3
-				lib.add_item(bu[0] + v, _item("bush_%d_%d" % [bu[1], v], EdenFoliageMeshes.bush(bu[1], summer, v), g, 0,
-						[], bu[7]))
-
-	if ground_scatter_enabled:
-		var anywhere := Vector2(0.0, 1.0)
-		var forest_t := Vector2(0.06, 0.85)
-		var forest_m := Vector2(0.3, 1.0)
-		var g := _gen(0.02 * scatter_density, anywhere, anywhere, VEGETATED + [MAT_SAND, MAT_ROCK], 0.0, 45.0)
-		g.min_scale = 0.3
-		g.max_scale = 0.8
-		lib.add_item(90, _item("pebbles", EdenFoliageMeshes.rock(EdenRockInstance.ROCK_PEBBLES, 0), g, 0, [], 50.0))
-		for v in 2:
-			g = _gen(0.003 * scatter_density / 2, anywhere, anywhere, VEGETATED + [MAT_ROCK, MAT_SNOW], 0.0, 40.0)
-			g.min_scale = 0.6
-			g.max_scale = 1.5
-			g.offset_along_normal = -0.1
-			lib.add_item(95 + v, _item("rocks_%d" % v, EdenFoliageMeshes.rock(EdenRockInstance.ROCK_CLUSTER, v), g, 0,
-					[], 90.0))
-		for v in 3:
-			var mesh := EdenFoliageMeshes.rock(EdenRockInstance.ROCK_BOULDER, v)
-			g = _gen(0.0004 * scatter_density / 3, anywhere, anywhere, VEGETATED + [MAT_ROCK, MAT_SNOW, MAT_SAND], 0.0, 40.0)
-			g.min_scale = 1.0
-			g.max_scale = 3.0
-			g.offset_along_normal = -0.3
-			lib.add_item(100 + v, _item("boulder_%d" % v, mesh, g, 1, _rock_shape(mesh)))
-		for v in 2:
-			g = _gen(0.012 * scatter_density / 2, forest_t, forest_m, VEGETATED, 0.0, 30.0)
-			g.vertical_alignment = 0.2 # lie along the ground
-			lib.add_item(105 + v, _item("branch_%d" % v, EdenFoliageMeshes.wood(false, v), g, 0, [], 60.0))
-		for v in 2:
-			var mesh := EdenFoliageMeshes.wood(true, v)
-			g = _gen(0.002 * scatter_density / 2, forest_t, forest_m, VEGETATED, 0.0, 25.0)
-			g.vertical_alignment = 0.2
-			var log_shape := CapsuleShape3D.new()
-			log_shape.radius = 0.28
-			log_shape.height = 4.0
-			lib.add_item(110 + v, _item("log_%d" % v, mesh, g, 0,
-					[log_shape, Transform3D(Basis(Vector3.BACK, PI * 0.5), Vector3(0, 0.25, 0))], 150.0))
-
-	if cliff_rocks_enabled:
-		# Set into steep rock faces: aligned with the face normal and partly buried, so they read as outcrops
-		var anywhere := Vector2(0.0, 1.0)
-		for v in 3:
-			var mesh := EdenFoliageMeshes.rock(EdenRockInstance.ROCK_BOULDER, 10 + v)
-			var g := _gen(0.0003 * cliff_rock_density / 3, anywhere, anywhere, [], 35.0, 90.0)
-			g.min_scale = 4.0
-			g.max_scale = 12.0
-			g.vertical_alignment = 0.0
-			g.offset_along_normal = -1.2
-			lib.add_item(120 + v, _item("cliff_boulder_%d" % v, mesh, g, 1, _rock_shape(mesh)))
-		for v in 2:
-			var mesh := EdenFoliageMeshes.rock(EdenRockInstance.ROCK_SPIRE, 10 + v)
-			var g := _gen(0.0003 * cliff_rock_density / 2, anywhere, anywhere, [], 30.0, 80.0)
-			g.min_scale = 3.0
-			g.max_scale = 7.0
-			g.vertical_alignment = 0.3
-			g.offset_along_normal = -1.0
-			lib.add_item(125 + v, _item("cliff_spire_%d" % v, mesh, g, 1, _rock_shape(mesh)))
-		for v in 2:
-			var mesh := EdenFoliageMeshes.rock(EdenRockInstance.ROCK_CLUSTER, 10 + v)
-			var g := _gen(0.001 * cliff_rock_density / 2, anywhere, anywhere, [MAT_ROCK, MAT_SNOW], 0.0, 35.0)
-			g.min_scale = 2.5
-			g.max_scale = 5.0
-			g.offset_along_normal = -0.6
-			lib.add_item(130 + v, _item("mountain_rocks_%d" % v, mesh, g, 1, _rock_shape(mesh)))
-
+	_ring_materials.clear()
+	var used := {}
+	for biome in _get_config().biomes:
+		if biome == null or not biome.enabled:
+			continue
+		for layer in biome.layers:
+			if layer == null or not layer.enabled:
+				continue
+			var temperature := _intersect(biome.temperature, layer.temperature)
+			var moisture := _intersect(biome.moisture, layer.moisture)
+			var slope := _intersect(biome.slope, layer.slope)
+			if temperature.x > temperature.y or moisture.x > moisture.y or slope.x > slope.y:
+				continue # the layer's limits exclude the whole biome
+			var materials := _material_ids(layer.materials if layer.materials != 0 else biome.materials)
+			var density := layer.density * biome.density_scale * density_scale
+			var size := Vector2(layer.scale_min, layer.scale_max) * biome.size_scale
+			if layer.is_tree():
+				size *= tree_size_scale
+			var variants: int = 1 if layer.is_grass() else layer.variants
+			var base := _alloc_ids(used, "%s/%s" % [biome.name, layer.name])
+			var far := far_foliage_enabled and layer.has_far(size.y) and get_parent() is VoxelLodTerrain
+			for v in variants:
+				var g := _gen(density / variants, temperature, moisture, materials, slope)
+				g.min_scale = size.x
+				g.max_scale = size.y
+				g.vertical_alignment = layer.vertical_alignment
+				# Sink is in metres at scale 1: bigger instances sink proportionally deeper
+				g.offset_along_normal = layer.sink * (size.x + size.y) * 0.5
+				if layer.clump_size > 0.0:
+					_add_clumping(g, base, layer.clump_size)
+				var item_name := "%s/%s_%d" % [biome.name, layer.name, v]
+				var item: VoxelInstanceLibraryMultiMeshItem
+				if layer.is_grass():
+					item = _grass_item(item_name, g, layer)
+				else:
+					var built: Dictionary = EdenFoliageMeshes.build(layer, v)
+					# With far tiers, the near item ends where the first tier starts (its own LOD's range)
+					var dd: float = layer.draw_distance if (layer.draw_distance > 0.0 or not far) else _lod_range(layer.lod)
+					item = _item(item_name, built.mesh, g, layer.lod, built.shape if layer.collision else [], dd)
+					if far: # exact per-instance cut where the far tiers take over (chunks only cut coarsely)
+						item.material_override = _ring_material(layer.sways(), 0.0, dd)
+				lib.add_item(base + v, item)
+			if far:
+				_add_far_tiers(lib, used, biome, layer, density, size, temperature, moisture, materials, slope)
 	_update_materials()
 	return lib
 
 
-func _gen(density: float, temperature: Vector2, moisture: Vector2, materials: Array, min_slope: float,
-		max_slope: float) -> VoxelInstanceGenerator:
+# Far tiers: the layer again on each coarser terrain LOD, each shown only in its own ring (from the previous LOD's
+# range to its own), so big things stay visible far out. Rings grow 4x in area per LOD, so every tier thins out
+# (and grows a little to keep coverage). Detail steps down with distance (see EdenFoliageLayer.far_detail_distance). Positions come
+# from each LOD's own chunks, so a far tree isn't the same tree as up close.
+func _add_far_tiers(lib: VoxelInstanceLibrary, used: Dictionary, biome: EdenFoliageBiome, layer: EdenFoliageLayer,
+		density: float, size: Vector2, temperature: Vector2, moisture: Vector2, materials: Array, slope: Vector2) -> void:
+	var mesh0: Mesh = EdenFoliageMeshes.build(layer, 0).mesh
+	var extent := mesh0.get_aabb().size
+	var metres := maxf(extent.x, maxf(extent.y, extent.z)) * size.y
+	var max_distance := minf(layer.far_distance * far_distance_scale, metres * far_visibility)
+	for k in range(layer.lod + 1, MAX_INSTANCER_LOD + 1):
+		var inner := _lod_range(k - 1)
+		if inner >= max_distance:
+			break
+		var outer := minf(_lod_range(k), max_distance)
+		var i := k - layer.lod - 1
+		var d := density * pow(layer.far_density_falloff, i)
+		var s := size * pow(layer.far_scale_growth, i)
+		# Detail steps down per ring: a finer voxel copy inside far_detail_distance, the normal
+		# one beyond, a coarser one past 4x that. One variant per tier: they're indistinguishable that far out.
+		var detail := layer.far_detail_distance
+		var res := layer.far_resolution * 2 if inner < detail else \
+				(layer.far_resolution if inner < detail * 4.0 else maxi(layer.far_resolution - 2, 2))
+		var variants := 1
+		var base := _alloc_ids(used, "%s/%s/far%d" % [biome.name, layer.name, k])
+		for v in variants:
+			var g := _gen(d / variants, temperature, moisture, materials, slope)
+			g.min_scale = s.x
+			g.max_scale = s.y
+			g.vertical_alignment = layer.vertical_alignment
+			g.offset_along_normal = layer.sink * (s.x + s.y) * 0.5
+			if layer.clump_size > 0.0:
+				_add_clumping(g, base, layer.clump_size)
+			var mesh := EdenFoliageMeshes.build_far(layer, v, res)
+			var item := VoxelInstanceLibraryMultiMeshItem.new()
+			item.name = "%s/%s_far%d_%d" % [biome.name, layer.name, k, v]
+			item.lod_index = k
+			item.generator = g
+			item.persistent = false
+			item.cast_shadow = RenderingServer.SHADOW_CASTING_SETTING_OFF
+			# Mesh LODs by chunk distance, as ratios of this LOD's range: nothing inside the ring (finer tiers draw
+			# there), the mesh within it, hidden beyond
+			item.mesh = EdenFoliageMeshes.empty_mesh()
+			item.set_mesh(mesh, 1)
+			item.hide_beyond_max_lod = true
+			# Chunks are measured from their centre, so widen by half a chunk diagonal; the shader cuts exactly
+			var r := _lod_range(k)
+			var margin := (get_parent() as VoxelLodTerrain).mesh_block_size * (1 << k) * 0.87
+			item.set("_mesh_lod_distance_ratios", PackedFloat32Array([maxf(inner - margin, 0.0) / r,
+					(outer + margin) / r, 2.0, 2.0]))
+			item.material_override = _ring_material(false, inner, outer)
+			lib.add_item(base + v, item)
+
+
+# Ids seed placement: stable per name, so edits elsewhere don't reshuffle this layer. 8 slots (variants) per name.
+func _alloc_ids(used: Dictionary, key: String) -> int:
+	var base := (hash(key) & 0x7fffffff) % 8000 * 8
+	while used.has(base):
+		base = (base + 8) % 64000
+	used[base] = true
+	return base
+
+
+# Distance where terrain LOD `lod` ends (VoxelLodTerrain::get_lod_distances): the instancer measures its mesh LOD
+# ratios against it. Legacy octree doubles per LOD; clipbox adds the secondary distance.
+func _lod_range(lod: int) -> float:
+	var terrain := get_parent() as VoxelLodTerrain
+	if terrain == null:
+		return 128.0 * (1 << lod)
+	if terrain.streaming_system != 0:
+		return terrain.lod_distance + (terrain.secondary_lod_distance * (1 << lod) if lod > 0 else 0.0)
+	return terrain.lod_distance * (1 << lod)
+
+
+func _intersect(a: Vector2, b: Vector2) -> Vector2:
+	return Vector2(maxf(a.x, b.x), minf(a.y, b.y))
+
+
+func _material_ids(bits: int) -> Array:
+	var ids := []
+	for i in MATERIAL_BITS:
+		if bits & (1 << i):
+			ids.append(i)
+	return ids
+
+
+func _gen(density: float, temperature: Vector2, moisture: Vector2, materials: Array,
+		slope: Vector2) -> VoxelInstanceGenerator:
 	var g := VoxelInstanceGenerator.new()
 	g.density = density
 	# Area-based (per m²). FACES_FAST is per triangle, and mesh optimization makes flat ground few big triangles
 	g.emit_mode = VoxelInstanceGenerator.EMIT_FROM_FACES
 	g.random_rotation = true
-	g.min_slope_degrees = min_slope
-	g.max_slope_degrees = max_slope
-	g.max_slope_falloff_degrees = 5.0
+	g.min_slope_degrees = slope.x
+	g.max_slope_degrees = slope.y
+	g.min_slope_falloff_degrees = 3.0 if slope.x > 0.0 else 0.0
+	g.max_slope_falloff_degrees = 5.0 if slope.y < 90.0 else 0.0
 	# Empty = any material. Cliffs need it: V4 marks rock by altitude, steep faces are rock only in the shader
 	g.voxel_texture_filter_enabled = not materials.is_empty()
 	g.voxel_texture_filter_array = PackedInt32Array(materials)
@@ -305,12 +319,12 @@ func _gen(density: float, temperature: Vector2, moisture: Vector2, materials: Ar
 	return g
 
 
-# Forest clumps: a noise field thins trees between patches instead of a uniform sprinkle
-func _add_clumping(g: VoxelInstanceGenerator, noise_seed: int) -> void:
+# Forest clumps: a noise field thins instances between patches instead of a uniform sprinkle
+func _add_clumping(g: VoxelInstanceGenerator, noise_seed: int, patch_size: float) -> void:
 	var noise := FastNoiseLite.new()
-	noise.seed = 4000 + noise_seed / 5 # shared by a species' variants
+	noise.seed = 4000 + noise_seed # shared by a layer's variants
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	noise.frequency = 1.0 / maxf(forest_patch_size, 1.0)
+	noise.frequency = 1.0 / maxf(patch_size, 1.0)
 	g.noise = noise
 	g.noise_dimension = VoxelInstanceGenerator.DIMENSION_3D
 	g.noise_threshold = -0.1
@@ -339,24 +353,13 @@ func _limit_draw_distance(item: VoxelInstanceLibraryMultiMeshItem, meters: float
 	var terrain := get_parent() as VoxelLodTerrain
 	if terrain == null:
 		return
-	# VoxelLodTerrain::get_lod_distances: legacy octree doubles per LOD, clipbox adds the secondary distance
 	var lod := item.lod_index
-	var lod_range := terrain.lod_distance * (1 << lod)
-	if terrain.streaming_system != 0:
-		lod_range = terrain.lod_distance + (terrain.secondary_lod_distance * (1 << lod) if lod > 0 else 0.0)
+	var lod_range := _lod_range(lod)
 	var margin := terrain.mesh_block_size * (1 << lod) * 0.87
 	item.hide_beyond_max_lod = true
 	# Whole-array setter: the per-LOD one clamps LOD0 to the LOD1 default (0.35)
 	var r := minf((meters + margin) / lod_range, 2.0)
 	item.set("_mesh_lod_distance_ratios", PackedFloat32Array([r, 2.0, 2.0, 2.0]))
-
-
-# Sphere a bit inside the rock's bounds (they're lumpy); scales with the instance
-func _rock_shape(mesh: Mesh) -> Array:
-	var aabb := mesh.get_aabb()
-	var s := SphereShape3D.new()
-	s.radius = maxf(aabb.size.x, aabb.size.z) * 0.4
-	return [s, Transform3D(Basis(), aabb.get_center())]
 
 
 func _update_materials() -> void:
@@ -365,43 +368,34 @@ func _update_materials() -> void:
 		m.set_shader_parameter("u_fade_end", grass_fade_end)
 		m.set_shader_parameter("u_wind_fade_start", grass_wind_fade_start)
 		m.set_shader_parameter("u_wind_fade_end", grass_wind_fade_end)
-	var tm := EdenFoliageMeshes.get_material(true) as ShaderMaterial
-	tm.set_shader_parameter("u_wind_fade_start", tree_wind_fade_start)
-	tm.set_shader_parameter("u_wind_fade_end", tree_wind_fade_end)
+	for tm: ShaderMaterial in [EdenFoliageMeshes.get_material(true)] + _ring_materials.values():
+		tm.set_shader_parameter("u_wind_fade_start", tree_wind_fade_start)
+		tm.set_shader_parameter("u_wind_fade_end", tree_wind_fade_end)
 
 
-func _grass_item(item_name: String, density: float, temperature: Vector2, moisture: Vector2, base: Color,
-		tip: Color) -> VoxelInstanceLibraryMultiMeshItem:
-	var gen := _gen(density, temperature, moisture, [MAT_GRASS], 0.0, grass_max_slope_degrees)
-	gen.min_scale = 0.7
-	gen.max_scale = 1.4
-	gen.vertical_alignment = 0.6 # lean partway into the slope, like the reference
+# The plant shader drawing only instances between camera distances inner..outer; without sway for rocks and wood.
+func _ring_material(sways: bool, inner: float, outer: float) -> ShaderMaterial:
+	var key := [sways, inner, outer]
+	if not _ring_materials.has(key):
+		var m := ShaderMaterial.new()
+		m.shader = (EdenFoliageMeshes.get_material(true) as ShaderMaterial).shader
+		if not sways:
+			m.set_shader_parameter("u_wind_strength", 0.0)
+		m.set_shader_parameter("u_ring", Vector2(inner, outer))
+		_ring_materials[key] = m
+	return _ring_materials[key]
+
+
+func _grass_item(item_name: String, gen: VoxelInstanceGenerator,
+		layer: EdenFoliageLayer) -> VoxelInstanceLibraryMultiMeshItem:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/eden_grass_lowpoly.gdshader")
-	mat.set_shader_parameter("u_base_color", Vector3(base.r, base.g, base.b))
-	mat.set_shader_parameter("u_tip_color", Vector3(tip.r, tip.g, tip.b))
+	var b := layer.grass_base_color
+	var t := layer.grass_tip_color
+	mat.set_shader_parameter("u_base_color", Vector3(b.r, b.g, b.b))
+	mat.set_shader_parameter("u_tip_color", Vector3(t.r, t.g, t.b))
 	_grass_materials.append(mat)
-
 	# Chunks past the fade stop drawing (the shader already shrank their tufts to nothing)
-	var item := _item(item_name, _build_tuft(mat), gen, 0, [], grass_fade_end)
+	var item := _item(item_name, EdenFoliageMeshes.tuft(blades_per_tuft, mat), gen, 0, [], grass_fade_end)
 	item.cast_shadow = RenderingServer.SHADOW_CASTING_SETTING_OFF
 	return item
-
-
-func _build_tuft(mat: Material) -> ArrayMesh:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7 # fixed so every tuft is the same mesh; variety comes from instance scale/rotation
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in blades_per_tuft:
-		var yaw := TAU * (float(i) + rng.randf() * 0.5) / blades_per_tuft
-		var dir := Vector3(cos(yaw), 0.0, sin(yaw))
-		var side := Vector3(-dir.z, 0.0, dir.x)
-		var root := dir * rng.randf_range(0.0, 0.15)
-		var half_w := rng.randf_range(0.04, 0.07)
-		var tip := root + dir * rng.randf_range(0.08, 0.2) + Vector3.UP * rng.randf_range(0.35, 0.65)
-		st.set_uv(Vector2(0, 0)); st.add_vertex(root - side * half_w)
-		st.set_uv(Vector2(1, 0)); st.add_vertex(root + side * half_w)
-		st.set_uv(Vector2(0.5, 1)); st.add_vertex(tip)
-	st.set_material(mat)
-	return st.commit()

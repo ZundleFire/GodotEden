@@ -4,6 +4,7 @@
 [ext_resource type="Shader" uid="uid://dfgwdf5l86w3o" path="res://shaders/EdenPlanet_LowPolyClimate.gdshader" id="2_g7vpv"]
 [ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
 [ext_resource type="Script" uid="uid://bj22rajkkuab1" path="res://eden_foliage.gd" id="eden_foliage_gd"]
+[ext_resource type="Resource" uid="uid://p5u8mxk0bux2" path="res://foliage/eden_foliage_default.tres" id="foliage_config"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_j51q1"]
 
@@ -1149,15 +1150,7 @@ seamless = true
 
 [sub_resource type="Gradient" id="Gradient_g7vpv"]
 
-[sub_resource type="FastNoiseLite" id="FastNoiseLite_ymyk4"]
-noise_type = 2
-frequency = 0.1
-fractal_octaves = 3
-cellular_distance_function = 1
-cellular_return_type = 0
-
 [sub_resource type="NoiseTexture2D" id="NoiseTexture2D_m2ix4"]
-noise = SubResource("FastNoiseLite_ymyk4")
 color_ramp = SubResource("Gradient_g7vpv")
 seamless = true
 
@@ -1326,11 +1319,10 @@ mesh_block_size = 32
 [node name="EdenFoliage" type="VoxelInstancer" parent="VoxelLodTerrain" unique_id=1086148909]
 up_mode = 1
 script = ExtResource("eden_foliage_gd")
-grass_density = 5.0
+config = ExtResource("foliage_config")
 grass_fade_end = 100.0
 grass_wind_fade_start = 10.0
 grass_wind_fade_end = 20.0
-tree_density = 0.012
 tree_wind_fade_start = 10.0
 tree_wind_fade_end = 30.0
 
@@ -1347,8 +1339,9 @@ moon_intensity = 0.14
 moon_angular_radius = 0.013613569
 moon_direction = Vector3(-0.83065856, -0.0017057533, -0.5567796)
 moon_glow_size = 0.012391837
-fog_density = 0.00022
-fog_height_falloff = 100.0
+fog_density = 0.00052
+fog_sun_intensity = 0.0
+fog_sun_scatter = 0.0
 light_ray_samples = 128
 sun_ray_intensity = 2.0
 sun_ray_threshold = 0.1
@@ -1357,7 +1350,6 @@ moon_ray_threshold = 0.1
 manage_glow = false
 
 [node name="EdenCloudShell" type="EdenCloudShell" parent="VoxelLodTerrain" unique_id=1864117121]
-visible = false
 cloud_bottom = 2200.0
 cloud_top = 2900.0
 weather_resolution = 256
@@ -1379,7 +1371,6 @@ material = SubResource("ShaderMaterial_jw5ea")
 
 [node name="EdenPlanetRings" type="EdenPlanetRings" parent="VoxelLodTerrain" unique_id=1214715238]
 transform = Transform3D(0.4218883, -0.14526778, -0.89493436, 0.32556814, 0.94551855, 0, 0.84617704, -0.2913621, 0.44619778, 0, 0, 0)
-visible = false
 ring_outer_radius = 2.0
 ring_tint = Color(1, 0.7433777, 0.5624249, 1)
 ring_opacity = 0.3

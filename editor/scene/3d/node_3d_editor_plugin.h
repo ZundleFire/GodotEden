@@ -121,6 +121,7 @@ class Node3DEditorViewport : public Control {
 		VIEW_CENTER_TO_SELECTION,
 		VIEW_ALIGN_TRANSFORM_WITH_VIEW,
 		VIEW_ALIGN_ROTATION_WITH_VIEW,
+		VIEW_ALIGN_UP,
 		VIEW_PERSPECTIVE,
 		VIEW_ENVIRONMENT,
 		VIEW_ORTHOGONAL,
@@ -248,6 +249,7 @@ private:
 
 	Button *translation_preview_button = nullptr;
 	CheckBox *preview_camera = nullptr;
+	CheckBox *six_dof_toggle = nullptr;
 	SubViewportContainer *subviewport_container = nullptr;
 
 	MenuButton *view_display_menu = nullptr;
@@ -267,6 +269,18 @@ private:
 	bool freelook_active;
 	real_t freelook_speed;
 	Vector2 previous_mouse_position;
+
+	bool six_dof_mode = false;
+
+	// 6DOF "Align to planet": camera up follows the radial direction from a sphere centre, so flying over a
+	// planet keeps the horizon level without rolling by hand. Centre = the Node3D selected when enabled
+	// (tracked live), else the world origin.
+	CheckBox *sphere_align_toggle = nullptr;
+	bool sphere_align = false;
+	ObjectID sphere_align_node;
+	Vector3 sphere_align_prev_up;
+	void _set_sphere_align(bool p_active);
+	void _update_sphere_align();
 
 	PanelContainer *info_panel = nullptr;
 	Label *info_label = nullptr;
@@ -414,6 +428,7 @@ private:
 		real_t x_rot, y_rot, distance, fov_scale;
 		real_t unsnapped_x_rot, unsnapped_y_rot;
 		Vector3 eye_pos; // Used in freelook mode
+		Quaternion six_dof_orientation; // Used in 6DOF mode only; x_rot/y_rot remain the stock-mode source of truth.
 		bool region_select;
 		Point2 region_begin, region_end;
 
@@ -425,6 +440,7 @@ private:
 			unsnapped_y_rot = y_rot;
 			distance = 4;
 			fov_scale = 1.0;
+			six_dof_orientation = Quaternion();
 			region_select = false;
 		}
 	};
@@ -462,6 +478,11 @@ private:
 
 	void set_freelook_active(bool active_now);
 	void scale_freelook_speed(real_t scale);
+
+	void set_six_dof_mode(bool p_active);
+	void _update_six_dof_roll(real_t p_delta);
+	void _align_up();
+	void _sync_six_dof_orientation_from_euler();
 
 	real_t zoom_indicator_delay;
 	int zoom_failed_attempts_count = 0;
@@ -570,6 +591,7 @@ public:
 	Dictionary get_state() const;
 	void reset();
 	bool is_freelook_active() const { return freelook_active; }
+	bool is_six_dof_mode_active() const { return six_dof_mode; }
 
 	Vector3 get_ray_pos(const Vector2 &p_pos) const;
 	Vector3 get_ray(const Vector2 &p_pos) const;

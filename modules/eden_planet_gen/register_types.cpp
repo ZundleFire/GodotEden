@@ -3,6 +3,7 @@
 #include "eden_planet_climate_profile.h"
 #include "eden_planet_generator_v1.h"
 #include "eden_planet_generator_v2.h"
+#include "eden_planet_generator_v3.h"
 #include "eden_planet_generator_v4.h"
 #include "planet_tectonics.h"
 #include "world_data_module.h"
@@ -15,8 +16,10 @@ void initialize_eden_planet_gen_module(ModuleInitializationLevel p_level) {
 		// V1: tectonics + climate + biomes + oceans + caves. The only variant with caves.
 		GDREGISTER_CLASS(EdenPlanetGeneratorV1);
 		// V2: same tectonics/climate pipeline, newer per-plate biome-region system, no caves.
-		// Prefer this one unless you need caves (see each class's own doc comment).
 		GDREGISTER_CLASS(EdenPlanetGeneratorV2);
+		// V3: V2 plus baked ocean water (CHANNEL_DATA5) for use with VoxelWaterSimulator.
+		// Prefer this one unless you need caves (V1) or don't need water simulation (V2).
+		GDREGISTER_CLASS(EdenPlanetGeneratorV3);
 		// V4: batched terrain kernels + erosion filter (ISPC), surface data (DATA6) for planet materials.
 		GDREGISTER_CLASS(EdenPlanetGeneratorV4);
 		GDREGISTER_CLASS(PlanetTectonics);

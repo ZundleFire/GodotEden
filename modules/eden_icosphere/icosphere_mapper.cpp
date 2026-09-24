@@ -165,7 +165,12 @@ void IcosphereMapper::_subdivide_once() {
 void IcosphereMapper::_build_adjacency() {
 	// Build edge → face mapping.
 	// Each edge (v0,v1) with v0<v1 is shared by exactly 2 faces.
-	HashMap<uint64_t, int> edge_face_map; // key → packed (face_a << 16 | edge_a) for first occurrence
+	// Value is packed as (face_a << 2 | edge_a), edge_a only ever needs 2 bits (0-2) -- packed
+	// into a uint64_t (not a 32-bit int) so face indices aren't limited to 16 bits. The previous
+	// `(fi << 16) | e` scheme silently overflowed (and produced negative packed values on
+	// unpack, causing an out-of-bounds crash indexing `faces`) for any mesh with >= 32768 faces,
+	// i.e. subdivision level 6 and above (20 * 4^6 = 81920 faces) -- confirmed via crash log.
+	HashMap<uint64_t, uint64_t> edge_face_map; // key → packed (face_a << 2 | edge_a) for first occurrence
 
 	edges.clear();
 
@@ -178,16 +183,16 @@ void IcosphereMapper::_build_adjacency() {
 			int hi = MAX(v0, v1);
 			uint64_t key = ((uint64_t)lo << 32) | (uint64_t)hi;
 
-			HashMap<uint64_t, int>::Iterator it = edge_face_map.find(key);
+			HashMap<uint64_t, uint64_t>::Iterator it = edge_face_map.find(key);
 			if (it == edge_face_map.end()) {
 				// First face touching this edge.
-				int packed = (fi << 16) | e;
+				uint64_t packed = ((uint64_t)fi << 2) | (uint64_t)e;
 				edge_face_map.insert(key, packed);
 			} else {
 				// Second face — link both as neighbours.
-				int packed_a = it->value;
-				int face_a = packed_a >> 16;
-				int edge_a = packed_a & 0xFFFF;
+				uint64_t packed_a = it->value;
+				int face_a = (int)(packed_a >> 2);
+				int edge_a = (int)(packed_a & 0x3);
 
 				faces.write[face_a].neighbours[edge_a] = fi;
 				faces.write[face_a].neighbour_edges[edge_a] = e;

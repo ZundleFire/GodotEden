@@ -3,7 +3,9 @@
 #include "modules/voxel/storage/mixel4.h"
 #include "modules/voxel/thirdparty/fast_noise/FastNoiseLite.h"
 #include "modules/voxel/storage/voxel_buffer.h"
+#include "modules/voxel/util/io/log.h"
 #include "modules/voxel/util/noise/voxel_terrain_noise.h"
+#include "modules/voxel/util/profiling.h"
 
 #include <cfloat>
 #include <climits>
@@ -30,9 +32,9 @@ struct SurfaceBuffers {
 		height.resize(n);
 		ridge.resize(n);
 		erosion.resize(n);
+		landform.resize(n);
 	}
 	void resize_climate(size_t n) {
-		landform.resize(n);
 		for (std::vector<float> *v : { &radial, &temperature, &moisture, &normalized_height, &zeros, &biome, &ocean,
 					 &coast, &river, &vegetation, &desert, &tundra, &mountain, &snow }) {
 			v->resize(n);
@@ -108,8 +110,6 @@ void compute_heights(
 		h[i] += p.terrain_base_height - p.planet_radius;
 	}
 
-	if (p.use_erosion) {
-		// Erosion writes its relief into a temp, then only lands on dry ground
 	// Landform regions. Noise is sampled on the planet_radius sphere: heights must depend on direction only (the
 	// lattice path in generate_on_lattice relies on it)
 	float *lf = b.landform.data();
@@ -148,6 +148,8 @@ void compute_heights(
 		std::fill(b.landform.begin(), b.landform.end(), 1.0f);
 	}
 
+	if (p.use_erosion) {
+		// Erosion writes its relief into a temp, then only lands on dry ground
 		b.radial.resize(count);
 		planet_erosion_series(x, y, z, b.radial.data(), b.ridge.data(), b.erosion.data(), count, make_erosion_params(p));
 		for (unsigned int i = 0; i < count; ++i) {
@@ -431,6 +433,52 @@ Parameters EdenPlanetGeneratorV4::get_parameters() const {
 	return _parameters;
 }
 
+void EdenPlanetGeneratorV4::generate_series(
+		zylann::Span<const float> positions_x,
+		zylann::Span<const float> positions_y,
+		zylann::Span<const float> positions_z,
+		unsigned int channel,
+		zylann::Span<float> out_values,
+		zylann::Vector3f min_pos,
+		zylann::Vector3f max_pos
+) {
+	ZN_PROFILE_SCOPE();
+
+	const unsigned int count = positions_x.size();
+	if (count == 0) {
+		return;
+	}
+
+	// SDF is the only channel this can answer. The materials this generator
+	// writes are MIXEL4, packed index and weight pairs in two integer channels,
+	// and a series call returns one float array -- there is no meaningful way to
+	// express them here. Callers that need materials must go through
+	// generate_block.
+	if (channel != zylann::voxel::VoxelBuffer::CHANNEL_SDF) {
+		ZN_PRINT_ERROR_ONCE("EdenPlanetGeneratorV4::generate_series only supports CHANNEL_SDF");
+		for (unsigned int i = 0; i < count; ++i) {
+			out_values[i] = 0.0f;
+		}
+		return;
+	}
+
+	const Parameters p = get_parameters();
+
+	thread_local SurfaceBuffers sb;
+	compute_heights(p, positions_x.data(), positions_y.data(), positions_z.data(), count, sb);
+
+	// Same formula generate_block uses: altitude above the reference sphere,
+	// minus the terrain height at that direction. Note there is no half-step
+	// offset here -- the caller gives exact points rather than cell corners.
+	for (unsigned int i = 0; i < count; ++i) {
+		const float x = positions_x[i];
+		const float y = positions_y[i];
+		const float z = positions_z[i];
+		const float alt = Math::sqrt(x * x + y * y + z * z) - p.planet_radius;
+		out_values[i] = alt - sb.height[i];
+	}
+}
+
 VoxelGenerator::Result EdenPlanetGeneratorV4::generate_block(VoxelQueryData input) {
 	Result result;
 	const Parameters p = get_parameters();
@@ -584,6 +632,14 @@ Dictionary EdenPlanetGeneratorV4::sample_surface(Vector3 direction) const {
 	d["temperature"] = b.temperature[0];
 	d["moisture"] = b.moisture[0];
 	d["biome_id"] = int(b.biome[0]);
+	d["landform"] = b.landform[0]; // 0 lowland .. 1 mountain range
+	float w[MAT_COUNT];
+	compute_material_weights(p, b, 0, ridge, w);
+	int dominant = 0;
+	for (int m = 1; m < MAT_COUNT; ++m) {
+		dominant = w[m] > w[dominant] ? m : dominant;
+	}
+	d["material"] = dominant; // MAT_*
 	return d;
 }
 
@@ -628,18 +684,19 @@ const PropDef g_prop_defs[] = {
 	V4_PROP(canyon_scale, PK_FLOAT, "10,200000,1"),
 	V4_PROP(terrace_strength, PK_FLOAT, "0,1,0.01"),
 	V4_PROP(terrace_count, PK_FLOAT, "1,64,1"),
+	V4_GROUP("Landforms"),
+	V4_PROP(landforms_enabled, PK_BOOL, ""),
+	V4_PROP(mountain_coverage, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(landform_scale, PK_FLOAT, "100,200000,1"),
+	V4_PROP(lowland_relief, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(lowland_erosion, PK_FLOAT, "0,1,0.01"),
+	V4_PROP(valley_depth, PK_FLOAT, "0,1000,1"),
+	V4_PROP(valley_width, PK_FLOAT, "0,0.5,0.001"),
+	V4_PROP(valley_scale, PK_FLOAT, "100,100000,1"),
 	V4_GROUP("Erosion"),
 	V4_PROP(use_erosion, PK_BOOL, ""),
 	V4_PROP(erosion_height_scale, PK_FLOAT, "0,4,0.01"),
 	V4_PROP(erosion_tile_size, PK_FLOAT, "100,100000,1,or_greater"),
-	d["landform"] = b.landform[0]; // 0 lowland .. 1 mountain range
-	float w[MAT_COUNT];
-	compute_material_weights(p, b, 0, ridge, w);
-	int dominant = 0;
-	for (int m = 1; m < MAT_COUNT; ++m) {
-		dominant = w[m] > w[dominant] ? m : dominant;
-	}
-	d["material"] = dominant; // MAT_*
 	V4_PROP(erosion_strength, PK_FLOAT, "0,1,0.001"),
 	V4_PROP(erosion_detail, PK_FLOAT, "0.01,4,0.01"),
 	V4_PROP(erosion_octaves, PK_INT, "0,12,1"),
@@ -684,15 +741,6 @@ bool EdenPlanetGeneratorV4::_set(const StringName &p_name, const Variant &p_valu
 			case PK_BOOL:
 				*reinterpret_cast<bool *>(field) = bool(p_value);
 				break;
-	V4_GROUP("Landforms"),
-	V4_PROP(landforms_enabled, PK_BOOL, ""),
-	V4_PROP(mountain_coverage, PK_FLOAT, "0,1,0.01"),
-	V4_PROP(landform_scale, PK_FLOAT, "100,200000,1"),
-	V4_PROP(lowland_relief, PK_FLOAT, "0,1,0.01"),
-	V4_PROP(lowland_erosion, PK_FLOAT, "0,1,0.01"),
-	V4_PROP(valley_depth, PK_FLOAT, "0,1000,1"),
-	V4_PROP(valley_width, PK_FLOAT, "0,0.5,0.001"),
-	V4_PROP(valley_scale, PK_FLOAT, "100,100000,1"),
 			default:
 				break;
 		}

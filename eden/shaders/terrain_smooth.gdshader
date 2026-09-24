@@ -55,7 +55,12 @@ uniform float snow_height_start  : hint_range(-2000.0, 2000.0) = 120.0;
 uniform float snow_height_blend  : hint_range(0.0, 50.0)       = 20.0;
 
 // Varyings
-varying vec4  v_indices;
+// v_indices must be flat: they're packed integer material ids, not continuous data. Without
+// `flat` the GPU linearly interpolates them across a triangle, which is a no-op inside a
+// uniform-material region but produces bogus blended-integer indices at any material boundary --
+// the source of a per-fragment speckle artifact seen only at region borders (see
+// demo_eden/shaders/planet_land.gdshader and BIOME_MATERIAL_PLAN.md, same bug, same fix).
+varying flat vec4  v_indices;
 varying vec4  v_weights;
 varying vec3  v_normal_world;
 varying vec3  v_pos_world;
