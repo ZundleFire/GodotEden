@@ -2,3 +2,7 @@
 	path = modules/voxel
 	url = https://github.com/ZundleFire/godot_voxel
 	branch = eden/main
+[submodule "eden_modules"]
+	path = eden_modules
+	url = https://github.com/ZundleFire/EdenModules.git
+	branch = main

@@ -34,6 +34,11 @@ echo $env:VULKAN_SDK
 
 > ⚠️ **Important:** Use **"Developer PowerShell for VS 2022"** (found in the Start menu), not regular PowerShell. MSVC must be on PATH.
 
+### Get the submodules
+```powershell
+git submodule update --init --recursive
+```
+
 ### Navigate to the repo
 ```powershell
 cd "f:\Dev\GodotEden"
@@ -41,7 +46,7 @@ cd "f:\Dev\GodotEden"
 
 ### First-time full build (recommended)
 ```powershell
-scons platform=windows target=editor vulkan=yes use_mingw=no -j8
+scons platform=windows target=editor vulkan=yes use_mingw=no custom_modules=eden_modules -j8
 ```
 
 ---
@@ -54,6 +59,7 @@ scons platform=windows target=editor vulkan=yes use_mingw=no -j8
 | `target` | `editor` | Builds the Godot editor |
 | `vulkan` | `yes` | Enable Vulkan rendering |
 | `use_mingw` | `no` | Use MSVC instead of MinGW |
+| `custom_modules` | `eden_modules` | Builds the Eden modules (atmosphere, clouds, ocean) from the `eden_modules` submodule |
 | `-j` | `8` | Parallel jobs — set to your CPU core count |
 | `dev_build` | `yes` | Include debug symbols (optional) |
 | `optimize` | `none` | Skip optimisation — faster compile, slower runtime (optional) |
@@ -74,7 +80,7 @@ f:\Dev\GodotEden\bin\godot.windows.editor.x86_64.exe
 
 SCons only recompiles changed files, so after the first build:
 ```powershell
-scons platform=windows target=editor vulkan=yes use_mingw=no -j8
+scons platform=windows target=editor vulkan=yes use_mingw=no custom_modules=eden_modules -j8
 ```
 
 > First build: ~30–60 minutes depending on CPU.  
@@ -94,5 +100,6 @@ It should display **Vulkan (Forward+)** or **Vulkan (Mobile)**.
 ## Notes
 
 - `modules/voxel` is included as a git submodule — SCons picks it up automatically as a custom module, no extra flags needed.
+- `eden_modules` is a git submodule ([EdenModules](https://github.com/ZundleFire/EdenModules), private) holding `eden_atmosphere` and `eden_ocean`. It is only built with `custom_modules=eden_modules`.
 - To pull upstream Godot engine updates: `git fetch origin`
 - To push your changes: `git push godoteden HEAD:main`
