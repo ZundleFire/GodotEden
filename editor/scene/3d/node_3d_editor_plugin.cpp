@@ -629,11 +629,13 @@ void Node3DEditorViewport::_update_camera(real_t p_interp_delta) {
 	//-------
 	// Apply camera transform
 
+	// Position uses an absolute tolerance (0.1 mm): Vector3::is_equal_approx is relative to the magnitude, so far
+	// from the origin (e.g. on a 40 km planet) it treated every sub-0.4 m freelook step as "no change" and skipped it.
 	real_t tolerance = 0.001;
 	bool equal = true;
 	if (!Math::is_equal_approx(old_camera_cursor.x_rot, camera_cursor.x_rot, tolerance) || !Math::is_equal_approx(old_camera_cursor.y_rot, camera_cursor.y_rot, tolerance)) {
 		equal = false;
-	} else if (!old_camera_cursor.pos.is_equal_approx(camera_cursor.pos)) {
+	} else if (old_camera_cursor.pos.distance_squared_to(camera_cursor.pos) > 1e-8) {
 		equal = false;
 	} else if (!Math::is_equal_approx(old_camera_cursor.distance, camera_cursor.distance, tolerance)) {
 		equal = false;
