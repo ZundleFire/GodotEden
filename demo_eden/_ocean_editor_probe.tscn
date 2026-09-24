@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://cq17jbsvkbhfl" path="res://_ocean_editor_probe.gd" id="1"]
 [ext_resource type="Shader" uid="uid://dfgwdf5l86w3o" path="res://shaders/EdenPlanet_LowPolyClimate.gdshader" id="2_g7vpv"]
 [ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
+[ext_resource type="Script" uid="uid://bj22rajkkuab1" path="res://eden_foliage.gd" id="eden_foliage_gd"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_j51q1"]
 
@@ -1314,6 +1315,17 @@ mesher = SubResource("VoxelMesherTransvoxel_s10u3")
 format = SubResource("VoxelFormat_d6x32")
 view_distance = 80000
 lod_count = 12
+[node name="EdenFoliage" type="VoxelInstancer" parent="VoxelLodTerrain" unique_id=1086148909]
+up_mode = 1
+script = ExtResource("eden_foliage_gd")
+grass_density = 5.0
+grass_fade_end = 100.0
+grass_wind_fade_start = 10.0
+grass_wind_fade_end = 20.0
+tree_density = 0.05
+tree_wind_fade_start = 10.0
+tree_wind_fade_end = 30.0
+
 lod_distance = 128.0
 secondary_lod_distance = 256.0
 material = SubResource("ShaderMaterial_ty8gc")
