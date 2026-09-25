@@ -47,6 +47,10 @@ enum Kind {
 ## Terrain LOD whose chunks this spawns on (0 = only the full-detail range around the camera).
 @export_range(0, 3) var lod := 0
 @export var collision := false
+enum ShadowMode { AUTO, ON, OFF }
+## Casts sun shadows. Auto: trees and rocks whose biggest size is at least 1.5 m -- small scatter's shadows are
+## barely visible but cost a shadow pass per cascade (ferns, shrubs and pebbles were ~10 ms at sunset on a GTX 750 Ti).
+@export var shadow_mode := ShadowMode.AUTO
 
 @export_group("Far LOD")
 enum FarMode { AUTO, ON, OFF }
@@ -103,6 +107,16 @@ func has_far(max_size: float) -> bool:
 		FarMode.ON:
 			return not is_grass()
 		FarMode.OFF:
+			return false
+	return is_tree() or (is_rock() and kind != Kind.PEBBLES and max_size >= 1.5)
+
+
+## Whether instances cast sun shadows, for a final size range (after the biome's size scale).
+func casts_shadow(max_size: float) -> bool:
+	match shadow_mode:
+		ShadowMode.ON:
+			return true
+		ShadowMode.OFF:
 			return false
 	return is_tree() or (is_rock() and kind != Kind.PEBBLES and max_size >= 1.5)
 

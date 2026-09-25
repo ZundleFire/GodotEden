@@ -204,6 +204,8 @@ func build_library() -> VoxelInstanceLibrary:
 					# With far tiers, the near item ends where the first tier starts (its own LOD's range)
 					var dd: float = layer.draw_distance if (layer.draw_distance > 0.0 or not far) else _lod_range(layer.lod)
 					item = _item(item_name, built.mesh, g, layer.lod, built.shape if layer.collision else [], dd)
+					if not layer.casts_shadow(size.y):
+						item.cast_shadow = RenderingServer.SHADOW_CASTING_SETTING_OFF
 					if far: # exact per-instance cut where the far tiers take over (chunks only cut coarsely)
 						item.material_override = _ring_material(layer.sways(), 0.0, dd)
 				lib.add_item(base + v, item)

@@ -1,6 +1,8 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
+#include "res://shaders/eden_weather.gdshaderinc"
+
 // Low-poly grass tufts spawned by EdenFoliage (VoxelInstancer MultiMesh).
 // Blades are single flat triangles; UV.y = 0 at the base, 1 at the tip.
 
@@ -17,21 +19,27 @@ uniform float u_wind_fade_end = 35.0;
 uniform float u_fade_start = 45.0;
 uniform float u_fade_end = 60.0;
 
-varying float v_height;
-varying flat float v_shade;
+// Final colour, weather included, worked out per vertex: blades are linear gradients, so interpolating
+// it is exact and the (overdraw-heavy) fragment stage stays as cheap as it was before weather
+varying vec3 v_albedo;
 
 float hash11(float n) {
 	return fract(sin(n * 12.9898) * 43758.5453);
 }
 
 void vertex() {
-	v_height = UV.y;
-	v_shade = 1.0 + (hash11(float(INSTANCE_ID)) * 2.0 - 1.0) * u_color_variation;
+	float v_height = UV.y;
+	float v_shade = 1.0 + (hash11(float(INSTANCE_ID)) * 2.0 - 1.0) * u_color_variation;
 
 	// Per-tuft camera distance, from the view-space origin (precise near the camera, unlike world
 	// coordinates ~40 km out)
 	float dist = length(MODELVIEW_MATRIX[3].xyz);
 	VERTEX *= 1.0 - smoothstep(u_fade_start, u_fade_end, dist);
+	// Buried by snow: tufts sink as it piles up (the terrain rises by the same depth)
+	vec4 weather = eden_weather(MODEL_MATRIX[3].xyz);
+	VERTEX.y -= weather.g * eden_weather_params.x * 1.6;
+	v_albedo = mix(u_base_color, u_tip_color, v_height) * v_shade;
+	v_albedo = mix(v_albedo, eden_snow_color(), weather.g * v_height) * (1.0 - 0.9 * eden_weather_params.y * weather.b);
 
 	// Tip-weighted sway in the tuft's local frame. Phase from world position is fine at planet
 	// scale: it only needs to vary slowly between neighbouring tufts.
@@ -50,7 +58,7 @@ void vertex() {
 }
 
 void fragment() {
-	ALBEDO = mix(u_base_color, u_tip_color, v_height) * v_shade;
+	ALBEDO = v_albedo;
 	ROUGHNESS = 0.9;
 	SPECULAR = 0.15;
 }

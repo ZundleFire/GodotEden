@@ -33,6 +33,14 @@ func _initialize() -> void:
 	for k in args: # --f_<export>=value overrides EdenFoliage exports (before it builds on entering the tree)
 		if k.begins_with("f_"):
 			foliage.set(k.substr(2), str_to_var(args[k]))
+	var amb := terrain.get_node_or_null("EdenAmbience")
+	for k in args: # --amb_<export>=value overrides EdenAmbience exports
+		if k.begins_with("amb_") and amb:
+			amb.set(k.substr(4), str_to_var(args[k]))
+		if k.begins_with("atmo_"): # --atmo_<export>=value overrides EdenPlanetAtmosphere exports
+			terrain.get_node("EdenPlanetAtmosphere").set(k.substr(5), str_to_var(args[k]))
+	if args.has("hide"): # --hide=<node path under the scene root>
+		scene.get_node(args.hide).visible = false
 	var gen: EdenPlanetGeneratorV4 = terrain.generator
 	var R: float = gen.planet_radius
 	var biome: String = args.get("biome", "temperate")
@@ -45,10 +53,22 @@ func _initialize() -> void:
 		var r := sqrt(maxf(0.0, 1.0 - y * y))
 		var d := Vector3(cos(golden * i) * r, y, sin(golden * i) * r)
 		var s: Dictionary = gen.sample_surface(d)
-		if float(s.height) < 20.0:
+		if float(s.height) < (1.0 if biome == "beach" else 20.0):
 			continue
 		var score := 0.0
-		if biome == "vista":
+		if biome == "beach":
+			# Warm low shore with sea within ~80 m
+			if float(s.height) > 8.0 or float(s.temperature) < 0.5:
+				continue
+			var tb := d.cross(Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT).normalized()
+			var wet := false
+			for k in 8:
+				var o := d.rotated(tb.rotated(d, TAU * k / 8.0), 80.0 / R)
+				wet = wet or float(gen.sample_surface(o).height) < -3.0
+			if not wet:
+				continue
+			score = float(s.temperature)
+		elif biome == "vista":
 			# High ground with temperate, vegetated lowland ~3 km away
 			var t0 := d.cross(Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT).normalized()
 			var low: Dictionary = gen.sample_surface(d.rotated(t0, 3000.0 / R))
@@ -106,13 +126,18 @@ func _initialize() -> void:
 	cam.add_child(viewer)
 	var cam_up := cam_pos.normalized()
 	cam.transform = Transform3D(Basis.looking_at(look.normalized(), cam_up), cam_pos)
+	if args.has("pitch"): # tilt the view up (+) or down (-), degrees
+		cam.transform.basis = cam.transform.basis * Basis(Vector3.RIGHT, deg_to_rad(float(args.pitch)))
 
 	# Sun ~55 degrees from overhead at the spot (see EdenPlanetAtmosphere::_update_sun_direction: axis +Y,
 	# ea = (0,0,-1), eb = (-1,0,0))
 	var atmo := terrain.get_node_or_null("EdenPlanetAtmosphere")
 	if atmo:
 		atmo.set("sun_declination_deg", rad_to_deg(asin(up.y)))
-		atmo.set("sun_time_of_day", fposmod(atan2(-up.x, -up.z) / TAU + 0.15, 1.0))
+		atmo.set("sun_time_of_day", fposmod(atan2(-up.x, -up.z) / TAU + float(args.get("sun_offset", "0.15")), 1.0))
+	# --storm=<intensity> parks a storm on the camera (--thunder for lightning)
+	if args.has("storm") and terrain.has_node("EdenAmbience"):
+		terrain.get_node("EdenAmbience").add_storm(cam_pos, 4000.0, float(args.storm), 1e6, args.has("thunder"), args.has("dust"))
 	start = Time.get_ticks_msec()
 	stable_since = start
 
@@ -133,6 +158,23 @@ func _relief(gen: EdenPlanetGeneratorV4, d: Vector3, dist: float) -> float:
 
 
 func _process(_d: float) -> bool:
+	if args.has("no_foliage_shadows") and foliage.library and not args.has("_done_shadows"):
+		args["_done_shadows"] = true
+		for id in foliage.library.get_all_item_ids():
+			foliage.library.get_item(id).cast_shadow = RenderingServer.SHADOW_CASTING_SETTING_OFF
+	if not args.has("_done_env") and root.get_viewport().world_3d.environment: # --env_<prop>=v overrides the Environment
+		args["_done_env"] = true
+		for k in args.keys():
+			if k.begins_with("env_"):
+				root.get_viewport().world_3d.environment.set(k.substr(4), str_to_var(args[k]))
+	if args.has("face_sun") and not args.has("_done_face") and terrain.get_node("EdenPlanetAtmosphere").get_sun_direction() != Vector3.UP: # toward the sun azimuth, once the atmosphere has applied the time of day
+		args["_done_face"] = true
+		var cam := root.get_viewport().get_camera_3d()
+		var up := cam.global_position.normalized()
+		var sun: Vector3 = terrain.get_node("EdenPlanetAtmosphere").get_sun_direction()
+		var flat := (sun - up * sun.dot(up)).normalized()
+		cam.global_transform = Transform3D(Basis.looking_at(flat - up * 0.08, up), cam.global_position)
+		print("CAPTURE face_sun: sun=", sun, " elev=", sun.dot(up), " fwd=", -cam.global_basis.z)
 	var counts: Dictionary = foliage.debug_get_instance_counts()
 	var total := 0
 	for k in counts:
@@ -155,6 +197,13 @@ func _process(_d: float) -> bool:
 		var sum := 0.0
 		for ms in gpu_ms.slice(20):
 			sum += ms
+		var at := terrain.get_node("EdenPlanetAtmosphere")
+		print("CAPTURE fog: density=", at.fog_density, " falloff=", at.fog_height_falloff, " base=", at.fog_base_altitude, " albedo=", at.fog_albedo, " sun=", at.fog_sun_intensity, " ambient_day=", at.fog_ambient_day)
+		var cs := terrain.get_node_or_null("EdenCloudShell")
+		if cs:
+			print("CAPTURE clouds: storm_map=", cs.get_material().get_shader_parameter("storm_map"), " coverage=", cs.get("cloud_coverage"))
+		if terrain.has_node("EdenAmbience"):
+			print("CAPTURE ambience: ", terrain.get_node("EdenAmbience").get_debug_state())
 		print("CAPTURE perf: gpu %.2f ms, %d primitives, %d draw calls" % [sum / (gpu_ms.size() - 20), tris, calls])
 		root.get_viewport().get_texture().get_image().save_png(args.get("out", "res://_foliage_capture.png"))
 		var gi = foliage.library.get_item(foliage.library.get_all_item_ids()[0])

@@ -26,6 +26,8 @@ _data = [0, 1, 1, 0, 1, 1, 0, 2, 0]
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_ty8gc"]
 render_priority = 0
 shader = ExtResource("2_g7vpv")
+shader_parameter/eden_weather_planet = Vector4(0, 0, 0, 0)
+shader_parameter/eden_weather_params = Vector4(0, 0, 0, 0)
 shader_parameter/u_planet_radius = 40000.0
 shader_parameter/u_planet_center_world = Vector3(0, 0, 0)
 shader_parameter/u_planet_north_world = Vector3(0, 1, 0)
@@ -1358,6 +1360,15 @@ wind_meridional_strength = 0.64
 cloud_drift_speed = 0.0015
 cloud_ambient = 0.5
 cloud_sunset_underlight = 0.25
+
+[node name="EdenAmbience" type="EdenAmbience" parent="VoxelLodTerrain" unique_id=1827038537]
+tonemapper = 4
+sun_shadows = false
+haze_density = 0.0006
+wind_speed = 8.0
+wind_heading = 220.0
+storm_speed = 15.0
+audio_in_editor = true
 
 [node name="Ocean" type="EdenPlanetOcean" parent="VoxelLodTerrain" unique_id=1330418570]
 planet_radius = 40000.0

@@ -1,6 +1,9 @@
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
 
+#define EDEN_WEATHER_MATERIAL_UNIFORMS
+#include "res://shaders/eden_weather.gdshaderinc"
+
 /*
     Eden Planet — Low-Poly Faceted Climate Terrain
     ------------------------------------------------
@@ -189,6 +192,7 @@ varying vec4 v_surface;
 varying vec3 v_pos_world;
 // Provoking-vertex altitude: one value per triangle, so highland rock cuts along facet edges.
 varying flat float v_face_altitude01;
+varying vec2 v_weather; // snow cover, wetness (EdenAmbience)
 
 
 // -----------------------------------------------------------------------------
@@ -607,6 +611,16 @@ void vertex() {
 
 	v_pos_world =
 		(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+
+	// Weather: snow piles up by lifting the ground along the planet's up. A function of position
+	// only, so vertices shared between LOD blocks move together and no cracks open.
+	vec4 weather = eden_weather(v_pos_world);
+	v_weather = weather.gb;
+	if (weather.g > 0.0) {
+		vec3 snow_lift = eden_weather_up(v_pos_world) * weather.g * eden_weather_params.x;
+		v_pos_world += snow_lift;
+		VERTEX += snow_lift * mat3(MODEL_MATRIX); // inverse of a rigid transform's rotation
+	}
 
 	v_face_altitude01 =
 		clamp(
@@ -1139,6 +1153,13 @@ void fragment() {
 			snow_amount
 		);
 
+	// Weather: fresh snow settles on flatter ground first; rain darkens and glosses the ground
+	float fresh_snow = smoothstep(0.0, 0.35, v_weather.x * 1.3 - (1.0 - slope_up) * 1.5);
+	albedo = mix(albedo, eden_snow_color(), fresh_snow);
+	snow_amount = max(snow_amount, fresh_snow);
+	float wet_amount = v_weather.y * (1.0 - snow_amount);
+	albedo *= 1.0 - eden_weather_params.y * wet_amount;
+
 
 	// -------------------------------------------------------------------------
 	// Moss
@@ -1236,6 +1257,8 @@ void fragment() {
 			0.86,
 			snow_amount * 0.60
 		);
+
+	ROUGHNESS = mix(ROUGHNESS, 0.3, wet_amount);
 
 	METALLIC = 0.0;
 

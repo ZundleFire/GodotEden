@@ -26,3 +26,22 @@ enabled=PackedStringArray("res://addons/eden_debug_probe/plugin.cfg")
 [global_group]
 
 ocean_ripple=""
+
+[shader_globals]
+
+eden_weather_map={
+"type": "sampler2D",
+"value": ""
+}
+eden_weather_planet={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_weather_params={
+"type": "vec4",
+"value": Vector4(0.35, 0.4, 0, 0)
+}
+eden_weather_snow={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}

@@ -6,7 +6,7 @@ extends RefCounted
 ## Mesh origins sit at the ground contact point, +Y up. Rocks are ~1 m across at scale 1.
 
 static var _wind_material: ShaderMaterial
-static var _static_material: StandardMaterial3D
+static var _static_material: ShaderMaterial
 static var _cache := {}
 
 const TREE_TYPES := {
@@ -30,10 +30,10 @@ static func get_material(wind := true) -> Material:
 			_wind_material = ShaderMaterial.new()
 			_wind_material.shader = load("res://shaders/eden_tree_lowpoly.gdshader")
 		return _wind_material
-	if _static_material == null:
-		_static_material = StandardMaterial3D.new()
-		_static_material.vertex_color_use_as_albedo = true
-		_static_material.roughness = 0.95
+	if _static_material == null: # the plant shader without sway, so rocks and wood take snow and rain too
+		_static_material = ShaderMaterial.new()
+		_static_material.shader = load("res://shaders/eden_tree_lowpoly.gdshader")
+		_static_material.set_shader_parameter("u_wind_strength", 0.0)
 	return _static_material
 
 
