@@ -1,6 +1,7 @@
 #pragma once
 
 #include "eden_ambience_audio.h"
+#include "eden_lightning.h"
 #include "eden_weather.h"
 #include "scene/3d/node_3d.h"
 
@@ -11,6 +12,18 @@ class ShaderMaterial;
 class Shader;
 class Environment;
 class ImageTexture;
+class MeshInstance3D;
+class OmniLight3D;
+
+// Lightning colours a strike picks from at random: blue-white, violet, pink, white
+static inline PackedColorArray _eden_default_bolt_colors() {
+	PackedColorArray c;
+	c.push_back(Color(0.65f, 0.75f, 1.0f));
+	c.push_back(Color(0.76f, 0.6f, 1.0f));
+	c.push_back(Color(1.0f, 0.7f, 0.92f));
+	c.push_back(Color(0.95f, 0.93f, 1.0f));
+	return c;
+}
 
 // X(type, name, default, hint, hint_string, group)
 #define EDEN_AMBIENCE_PROPS(X)                                                                        \
@@ -33,7 +46,18 @@ class ImageTexture;
 	X(float, storm_desaturation, 0.3f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Storm Look")                       \
 	X(float, storm_sun_dimming, 0.65f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Storm Look")                       \
 	X(float, storm_shadow_fade, 0.75f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Storm Look")                       \
-	X(float, lightning_brightness, 2.5f, PROPERTY_HINT_RANGE, "0.0,10.0,0.01", "Storm Look")                    \
+	X(float, lightning_brightness, 1.5f, PROPERTY_HINT_RANGE, "0.0,10.0,0.01", "Storm Look")                    \
+	X(Color, bolt_color, Color(0.65f, 0.75f, 1.0f), PROPERTY_HINT_COLOR_NO_ALPHA, "", "Lightning")              \
+	X(PackedColorArray, bolt_colors, _eden_default_bolt_colors(), PROPERTY_HINT_NONE, "", "Lightning") \
+	X(float, bolt_brightness, 25.0f, PROPERTY_HINT_RANGE, "0.0,200.0,0.1", "Lightning")                         \
+	X(float, bolt_width, 1.5f, PROPERTY_HINT_RANGE, "0.1,20.0,0.01,suffix:m", "Lightning")                      \
+	X(float, lightning_light_energy, 3.0f, PROPERTY_HINT_RANGE, "0.0,500.0,0.1", "Lightning")                  \
+	X(float, lightning_light_range, 2500.0f, PROPERTY_HINT_RANGE, "50,20000,1,suffix:m", "Lightning")           \
+	X(float, cloud_flash_brightness, 1.8f, PROPERTY_HINT_RANGE, "0.0,20.0,0.01", "Lightning")                   \
+	X(float, intra_cloud_chance, 0.4f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Lightning")                        \
+	X(float, lightning_view_bias, 0.55f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Lightning")                      \
+	X(float, lightning_min_distance, 300.0f, PROPERTY_HINT_RANGE, "20,20000,1,suffix:m", "Lightning")           \
+	X(float, lightning_max_distance, 6000.0f, PROPERTY_HINT_RANGE, "100,50000,1,suffix:m", "Lightning")         \
 	X(bool, fog_enabled, true, PROPERTY_HINT_NONE, "", "Fog")                                                   \
 	X(float, haze_density, 0.0003f, PROPERTY_HINT_RANGE, "0.0,0.01,0.00001", "Fog")                             \
 	X(float, haze_height, 300.0f, PROPERTY_HINT_RANGE, "10,4000,1,suffix:m", "Fog")                             \
@@ -111,7 +135,12 @@ class ImageTexture;
 	X(float, birds_volume, 0.0f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Audio")                                  \
 	X(float, crickets_volume, 0.0f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Audio")                               \
 	X(float, rain_volume, 1.0f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Audio")                                   \
-	X(float, thunder_volume, 1.0f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Audio")
+	X(float, thunder_volume, 1.0f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Audio")                                \
+	X(bool, spatial_audio, true, PROPERTY_HINT_NONE, "", "Spatial Audio")                                       \
+	X(float, surf_range, 350.0f, PROPERTY_HINT_RANGE, "20,2000,1,suffix:m", "Spatial Audio")                    \
+	X(float, surf_unit_size, 25.0f, PROPERTY_HINT_RANGE, "1,200,0.1", "Spatial Audio")                          \
+	X(float, forest_sound_range, 120.0f, PROPERTY_HINT_RANGE, "10,1000,1,suffix:m", "Spatial Audio")            \
+	X(float, leaves_unit_size, 10.0f, PROPERTY_HINT_RANGE, "1,200,0.1", "Spatial Audio")
 
 // Environmental ambience for a planet: scene look (exposure, grading, SSAO, glow, sun shadows),
 // camera-following particles (motes, fireflies, snow, rain, leaves, dust), regional weather and a procedural soundscape,
@@ -175,6 +204,43 @@ private:
 	float flash = 0.0f; // lightning, decays in a few frames
 	float strike_timer = 3.0f;
 	int lightning_strikes = 0;
+
+	// Visible lightning: a couple of strikes can overlap
+	struct Strike {
+		MeshInstance3D *mesh = nullptr;
+		OmniLight3D *light = nullptr;
+		Ref<ShaderMaterial> material;
+		EdenLightningBolt bolt;
+		float t = -1.0f; // < 0: idle
+		Vector3 top, ground;
+		float distance = 0.0f;
+		bool cloud_only = false;
+		Color color;
+	};
+	static constexpr int MAX_BOLTS = 2;
+	Strike bolts[MAX_BOLTS];
+	Ref<Shader> bolt_shader;
+	RandomPCG bolt_rng;
+	Vector3 cam_forward = Vector3(0, 0, -1);
+	float cloud_flash = 0.0f;
+	Color cloud_flash_color;
+
+	// Spatial audio: surf from the nearest shorelines, rustling from the nearest dense forest. Plain
+	// AudioStreamPlayers panned and attenuated here from the camera: AudioStreamPlayer3D children inside the
+	// edited scene made the editor's scene dock error on shutdown.
+	struct Emitter {
+		AudioStreamPlayer *player = nullptr;
+		Ref<AudioStreamEdenAmbience> stream;
+		AudioStreamEdenAmbience::Layer layer = AudioStreamEdenAmbience::LAYER_SURF;
+		Vector3 pos, target;
+		float level = 0.0f, target_level = 0.0f;
+	};
+	static constexpr int SURF_EMITTERS = 3;
+	static constexpr int LEAF_EMITTERS = 4;
+	Emitter surf_emitters[SURF_EMITTERS];
+	Emitter leaf_emitters[LEAF_EMITTERS];
+	float source_timer = 0.0f;
+	float forest_here = -1.0f; // forest density within ~25 m (< 0: no foliage node to ask)
 	float applied_exposure = -1.0f, applied_saturation = -1.0f;
 
 	// Climate at the camera, refreshed by _survey()
@@ -194,13 +260,18 @@ private:
 
 	Node3D *_get_planet() const;
 	Node *_get_atmosphere() const;
-	bool _get_camera(Vector3 &r_pos) const;
+	bool _get_camera(Vector3 &r_pos, Basis *r_basis = nullptr) const;
 	void _build();
 	void _survey(const Vector3 &p_cam);
 	void _update(double p_delta);
 	void _apply_look();
 	void _restore_fog();
 	void _apply_fx_params();
+	bool _pick_strike_point(Vector3 &r_ground) const;
+	void _strike(const Vector3 &p_ground, bool p_cloud_only);
+	void _update_bolts(double p_delta, const Vector3 &p_cam);
+	void _find_sound_sources(const Vector3 &p_cam);
+	void _update_emitters(double p_delta, bool p_play, float p_wind, const Vector3 &p_cam, const Basis &p_cam_basis);
 	void _update_weather(double p_delta, const Vector3 &p_cam, const Vector3 &p_sun);
 	DirectionalLight3D *_find_sun(Node *p_atmosphere) const;
 
@@ -229,6 +300,9 @@ public:
 	// A storm centred at a world position (radius in metres, duration in weather-seconds).
 	void add_storm(const Vector3 &p_world_position, float p_radius, float p_intensity, float p_duration, bool p_thunder, bool p_dust);
 	void clear_snow_and_wetness();
+	// A lightning strike at a world position on the ground (Vector3() = somewhere around the camera, as the
+	// storms pick), or a flash inside the cloud above it.
+	void strike_lightning(const Vector3 &p_world_position, bool p_cloud_only);
 	Ref<ImageTexture> get_weather_texture() const;
 
 	EdenAmbience();

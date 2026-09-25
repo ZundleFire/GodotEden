@@ -28,16 +28,31 @@ func _initialize() -> void:
 		var finite := is_finite(rms)
 		ok = ok and finite and rms > 0.003 and peak < 1.0
 		print("AMB_AUDIO %-8s rms=%.4f (%.1f dBFS) peak=%.3f" % [name, rms, 20.0 * log(maxf(rms, 1e-9)) / log(10.0), peak])
-		var bytes := PackedByteArray()
-		bytes.resize(frames.size() * 4)
-		for j in frames.size():
-			bytes.encode_s16(j * 4, int(clampf(frames[j].x, -1, 1) * 32767))
-			bytes.encode_s16(j * 4 + 2, int(clampf(frames[j].y, -1, 1) * 32767))
-		var wav := AudioStreamWAV.new()
-		wav.format = AudioStreamWAV.FORMAT_16_BITS
-		wav.stereo = true
-		wav.mix_rate = 44100
-		wav.data = bytes
-		wav.save_to_wav(out.path_join("amb_%s.wav" % name))
+		_save(frames, out.path_join("amb_%s.wav" % name))
+	# A storm like the reference recording: rain, two distant rumbles, then a close strike at 7 s
+	var storm := AudioStreamEdenAmbience.new()
+	storm.set_level(AudioStreamEdenAmbience.LAYER_RAIN, 0.6)
+	storm.set_level(AudioStreamEdenAmbience.LAYER_WIND, 0.3)
+	var sf := storm.render(11.0, 3, PackedVector2Array([Vector2(0.5, 0.85), Vector2(4.5, 0.8), Vector2(7.0, 0.05)]))
+	var speak := 0.0
+	for f in sf:
+		speak = maxf(speak, maxf(absf(f.x), absf(f.y)))
+	ok = ok and speak < 1.0
+	print("AMB_AUDIO storm peak=%.3f" % speak)
+	_save(sf, out.path_join("amb_storm.wav"))
 	print("AMB_AUDIO ", "PASS" if ok else "FAIL")
 	quit(0 if ok else 1)
+
+
+func _save(frames: PackedVector2Array, path: String) -> void:
+	var bytes := PackedByteArray()
+	bytes.resize(frames.size() * 4)
+	for j in frames.size():
+		bytes.encode_s16(j * 4, int(clampf(frames[j].x, -1, 1) * 32767))
+		bytes.encode_s16(j * 4 + 2, int(clampf(frames[j].y, -1, 1) * 32767))
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.stereo = true
+	wav.mix_rate = 44100
+	wav.data = bytes
+	wav.save_to_wav(path)

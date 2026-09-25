@@ -28,6 +28,7 @@ render_priority = 0
 shader = ExtResource("2_g7vpv")
 shader_parameter/eden_weather_planet = Vector4(0, 0, 0, 0)
 shader_parameter/eden_weather_params = Vector4(0, 0, 0, 0)
+shader_parameter/eden_weather_snow = Vector4(0, 0, 0, 0)
 shader_parameter/u_planet_radius = 40000.0
 shader_parameter/u_planet_center_world = Vector3(0, 0, 0)
 shader_parameter/u_planet_north_world = Vector3(0, 1, 0)
@@ -922,11 +923,15 @@ void fragment() {
 		}
 		NORMAL = -NORMAL; // facing away from us only because the wave is steeper than the view ray
 	}
-	if (low_poly_normals && low_poly_fade > 0.0) {
+	// Far off at grazing angles the pixel-footprint derivatives can come out parallel (or zero), and
+	// normalize() of their zero-length cross product is NaN: black specks along the horizon that glow
+	// then smeared into big white blobs. Keep the smooth normal there.
+	vec3 face_cross = cross(dFdx(local_pos), dFdy(local_pos));
+	if (low_poly_normals && low_poly_fade > 0.0 && dot(face_cross, face_cross) > 1e-24) {
 		// True face normal of this triangle, from the precise patch-local position.
 		// local_pos is patch-local, and patches carry translation only, so its cross product is a
 		// world-space direction; NORMAL and VIEW are view space.
-		vec3 fn = normalize(cross(dFdx(local_pos), dFdy(local_pos)));
+		vec3 fn = normalize(face_cross);
 		fn = normalize((VIEW_MATRIX * vec4(fn, 0.0)).xyz);
 		fn = dot(fn, VIEW) < 0.0 ? -fn : fn;
 		// Tilt it away from the local vertical so neighbouring facets actually differ (see the
@@ -1368,7 +1373,13 @@ haze_density = 0.0006
 wind_speed = 8.0
 wind_heading = 220.0
 storm_speed = 15.0
+leaves_amount = 0.01
+dust_amount = 0.08
 audio_in_editor = true
+wind_volume = 0.2
+leaves_volume = 0.01
+surf_volume = 0.1
+rain_volume = 0.5
 
 [node name="Ocean" type="EdenPlanetOcean" parent="VoxelLodTerrain" unique_id=1330418570]
 planet_radius = 40000.0

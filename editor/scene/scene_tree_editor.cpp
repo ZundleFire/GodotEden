@@ -984,6 +984,10 @@ void SceneTreeEditor::_update_tree(bool p_scroll_to_selected) {
 }
 
 bool SceneTreeEditor::_update_filter(TreeItem *p_parent, bool p_scroll_to_selected) {
+	// Items hold absolute node paths, which can't be resolved once this dock has left the tree (editor shutdown)
+	if (!is_inside_tree()) {
+		return false;
+	}
 	if (!p_parent) {
 		p_parent = tree->get_root();
 		filter_term_warning.clear();
@@ -1271,6 +1275,10 @@ void SceneTreeEditor::_tree_changed() {
 }
 
 void SceneTreeEditor::_selected_changed() {
+	// Items hold absolute node paths, which can't be resolved once this dock has left the tree (editor shutdown)
+	if (!is_inside_tree()) {
+		return;
+	}
 	TreeItem *s = tree->get_selected();
 	ERR_FAIL_NULL(s);
 	NodePath np = s->get_metadata(0);
@@ -1297,6 +1305,10 @@ void SceneTreeEditor::_deselect_items() {
 }
 
 void SceneTreeEditor::_cell_multi_selected(Object *p_object, int p_cell, bool p_selected) {
+	// Items hold absolute node paths, which can't be resolved once this dock has left the tree (editor shutdown)
+	if (!is_inside_tree()) {
+		return;
+	}
 	TreeItem *item = Object::cast_to<TreeItem>(p_object);
 	ERR_FAIL_NULL(item);
 
@@ -1756,6 +1768,10 @@ void SceneTreeEditor::set_editor_selection(EditorSelection *p_selection) {
 }
 
 void SceneTreeEditor::_update_selection(TreeItem *item) {
+	// Items hold absolute node paths, which can't be resolved once this dock has left the tree (editor shutdown)
+	if (!is_inside_tree()) {
+		return;
+	}
 	ERR_FAIL_NULL(item);
 
 	NodePath np = item->get_metadata(0);

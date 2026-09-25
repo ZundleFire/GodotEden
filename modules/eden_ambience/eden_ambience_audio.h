@@ -28,6 +28,10 @@ public:
 	std::atomic<float> thunder_delay{ 0.0f };
 	std::atomic<float> thunder_distance{ 0.5f }; // 0 overhead .. 1 far away
 	std::atomic<float> thunder_gain{ 1.0f };
+	// Output gain and left/right balance (-1..1), eased per sample: EdenAmbience's spatial emitters set these
+	// from where their source is relative to the camera
+	std::atomic<float> out_gain{ 1.0f };
+	std::atomic<float> out_pan{ 0.0f };
 
 protected:
 	static void _bind_methods();
@@ -37,7 +41,7 @@ public:
 	float get_level(Layer p_layer) const;
 
 	// Mixes `p_seconds` offline into a fresh playback (tests/previews; levels jump straight to target).
-	PackedVector2Array render(float p_seconds, int p_seed = 1);
+	PackedVector2Array render(float p_seconds, int p_seed = 1, const PackedVector2Array &p_thunder = PackedVector2Array());
 	void trigger_thunder(float p_delay, float p_distance);
 
 	virtual Ref<AudioStreamPlayback> instantiate_playback() override;
@@ -89,10 +93,18 @@ class AudioStreamPlaybackEdenAmbience : public AudioStreamPlaybackResampled {
 	Cricket crickets[CRICKETS];
 	// rain
 	float rain_hp[2] = {}, rain_lp[2] = {}, rain_lp2[2] = {}, rain_body[2] = {}, rain_swell = 0.5f, rain_swell_target = 0.5f;
-	// thunder
+	// thunder: up to two strikes rolling at once
+	struct Thunder {
+		bool active = false;
+		float t = 0, dist = 0.5f;
+		float crackle = 0.5f, crackle_target = 0.5f, swell = 0.7f, swell_target = 0.7f;
+		float lp[2] = {}, lp2[2] = {}, sub[2] = {}, tear_hp[2] = {}, tear_lp[2] = {}, crack_lp[2] = {};
+	};
+	Thunder thunders[2];
 	uint32_t thunder_seen = 0;
-	float thunder_t = -1e9f, thunder_dist = 0.5f, thunder_lp = 0, thunder_lp2 = 0, thunder_swell = 0, thunder_swell_target = 0, thunder_clp = 0;
+	void _thunder_frame(Thunder &p_th, float p_gain, float &r_l, float &r_r);
 	float echo[2][8192] = {};
+	float cur_gain = -1.0f, cur_pan = 0.0f;
 	int echo_pos = 0;
 
 	float _rand() { // [0, 1)

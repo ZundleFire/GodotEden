@@ -56,7 +56,14 @@ func _initialize() -> void:
 		if float(s.height) < (1.0 if biome == "beach" else 20.0):
 			continue
 		var score := 0.0
-		if biome == "beach":
+		if biome == "forest":
+			# Deep in a dense forest patch (EdenFoliage's forest mask), on gentle ground
+			if float(s.temperature) < 0.4 or float(s.temperature) > 0.7 or float(s.moisture) < 0.5 or float(s.landform) > 0.35:
+				continue
+			score = foliage.get_forest_density(d * (R + float(s.height))) - _relief(gen, d, 30.0) * 0.01
+			if score < 0.9:
+				continue
+		elif biome == "beach":
 			# Warm low shore with sea within ~80 m
 			if float(s.height) > 8.0 or float(s.temperature) < 0.5:
 				continue
@@ -115,7 +122,7 @@ func _initialize() -> void:
 		cam_pos = up * (ground + 40.0) + down_dir * 220.0
 		look = up * ground - cam_pos
 	else:
-		cam_pos = up * (ground + 2.5)
+		cam_pos = up * (ground + float(args.get("alt", "2.5")))
 		look = t * 50.0 - up * 6.0
 	var cam := Camera3D.new()
 	cam.far = 30000.0
@@ -185,6 +192,8 @@ func _process(_d: float) -> bool:
 		last_sig = sig
 		stable_since = now
 	if (now - stable_since > QUIET_S * 1000 and now - start > 8000) or now - start > 120000:
+		if args.has("lightning") and _lightning_frame():
+			return false
 		# Once settled: average GPU time and triangle count over 120 frames before saving
 		var vp := root.get_viewport_rid()
 		if gpu_ms.is_empty():
@@ -239,3 +248,32 @@ func _tris(m: Mesh) -> int:
 		var idx = a[Mesh.ARRAY_INDEX]
 		n += (idx.size() if idx is PackedInt32Array and idx.size() > 0 else a[Mesh.ARRAY_VERTEX].size()) / 3
 	return n
+
+
+# --lightning[=distance m]: once settled, strike ahead of the camera and hold the capture for the brightest
+# frame of the flash. Returns true while still waiting.
+var _strike_frames := -1
+var _best_flash := 0.0
+func _lightning_frame() -> bool:
+	var amb := terrain.get_node("EdenAmbience")
+	if _strike_frames < 0:
+		var cam := root.get_viewport().get_camera_3d()
+		var up := cam.global_position.normalized()
+		var fwd := -cam.global_basis.z
+		fwd = (fwd - up * fwd.dot(up)).normalized()
+		var dist := float(args.lightning) if args.lightning != "1" else 900.0
+		var R: float = terrain.generator.planet_radius
+		var dir := (up + fwd * (dist / R)).normalized()
+		var ground := dir * (R + maxf(float(terrain.generator.sample_surface(dir).height), 0.0))
+		amb.strike_lightning(ground, false)
+		_strike_frames = 0
+		return true
+	_strike_frames += 1
+	var f: float = amb.get_debug_state().flash
+	# Save on the first frame of a return stroke (the leader alone is dim), or give up after a second
+	if f < 0.5 and _strike_frames < 60:
+		return true
+	print("CAPTURE lightning: flash=%.2f after %d frames" % [f, _strike_frames])
+	root.get_viewport().get_texture().get_image().save_png(args.get("out", "res://_foliage_capture.png"))
+	quit()
+	return true

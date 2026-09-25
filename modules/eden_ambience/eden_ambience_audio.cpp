@@ -42,10 +42,12 @@ Ref<AudioStreamPlayback> AudioStreamEdenAmbience::instantiate_playback() {
 	Ref<AudioStreamPlaybackEdenAmbience> pb;
 	pb.instantiate();
 	pb->stream = Ref<AudioStreamEdenAmbience>(this);
+	// Own noise per playback: several emitters playing the same layer must not be sample-identical
+	pb->rng = 0x9E3779B9u ^ (Math::rand() | 1u);
 	return pb;
 }
 
-PackedVector2Array AudioStreamEdenAmbience::render(float p_seconds, int p_seed) {
+PackedVector2Array AudioStreamEdenAmbience::render(float p_seconds, int p_seed, const PackedVector2Array &p_thunder) {
 	Ref<AudioStreamPlaybackEdenAmbience> pb = instantiate_playback();
 	pb->rng = 0x9E3779B9u ^ (uint32_t)p_seed * 2654435761u;
 	pb->start();
@@ -54,7 +56,13 @@ PackedVector2Array AudioStreamEdenAmbience::render(float p_seconds, int p_seed) 
 	const int n = (int)(p_seconds * AudioStreamPlaybackEdenAmbience::RATE);
 	out.resize(n);
 	Vector2 *w = out.ptrw();
+	int next_event = 0;
 	for (int i = 0; i < n; i++) {
+		// Thunder events: (time in seconds, distance 0..1)
+		while (next_event < p_thunder.size() && p_thunder[next_event].x * AudioStreamPlaybackEdenAmbience::RATE <= i) {
+			trigger_thunder(0.0f, p_thunder[next_event].y);
+			next_event++;
+		}
 		float l, r;
 		pb->_frame(l, r);
 		w[i] = Vector2(l, r);
@@ -71,7 +79,7 @@ void AudioStreamEdenAmbience::trigger_thunder(float p_delay, float p_distance) {
 void AudioStreamEdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_level", "layer", "level"), &AudioStreamEdenAmbience::set_level);
 	ClassDB::bind_method(D_METHOD("get_level", "layer"), &AudioStreamEdenAmbience::get_level);
-	ClassDB::bind_method(D_METHOD("render", "seconds", "seed"), &AudioStreamEdenAmbience::render, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("render", "seconds", "seed", "thunder"), &AudioStreamEdenAmbience::render, DEFVAL(1), DEFVAL(PackedVector2Array()));
 	ClassDB::bind_method(D_METHOD("trigger_thunder", "delay", "distance"), &AudioStreamEdenAmbience::trigger_thunder);
 
 	BIND_ENUM_CONSTANT(LAYER_WIND);
@@ -322,39 +330,29 @@ void AudioStreamPlaybackEdenAmbience::_frame(float &r_l, float &r_r) {
 		}
 	}
 
-	// Thunder: a crack for close strikes, then a rolling low rumble that swells and fades
-	const uint32_t serial = s->thunder_serial.load(std::memory_order_relaxed);
+	// Thunder
+	const uint32_t serial = s->thunder_serial.load(std::memory_order_acquire);
 	if (serial != thunder_seen) {
 		thunder_seen = serial;
-		thunder_t = -s->thunder_delay.load(std::memory_order_relaxed);
-		thunder_dist = CLAMP(s->thunder_distance.load(std::memory_order_relaxed), 0.0f, 1.0f);
-		thunder_swell = 0.5f;
-	}
-	if (thunder_t > -1e8f) {
-		thunder_t += dt;
-		const float T = thunder_t;
-		const float dur = Math::lerp(5.0f, 9.0f, thunder_dist);
-		if (T > dur) {
-			thunder_t = -1e9f;
-		} else if (T >= 0.0f) {
-			if (_rand() < 6.0f * dt) {
-				thunder_swell_target = _rand();
+		// A free slot, else replace the one that has rolled longest
+		Thunder *slot = &thunders[0];
+		for (Thunder &th : thunders) {
+			if (!th.active || th.t > slot->t) {
+				slot = &th;
+				if (!th.active) {
+					break;
+				}
 			}
-			thunder_swell += (thunder_swell_target - thunder_swell) * dt * 6.0f;
-			const float near = (1.0f - thunder_dist) * (1.0f - thunder_dist);
-			const float crack = T < 0.5f ? near * std::exp(-T * 10.0f) : 0.0f;
-			// Fades out over the last third instead of stopping dead
-			const float env = _smoothstep(0.0f, 0.25f + 0.5f * thunder_dist, T) * std::exp(-T / (1.5f + 2.0f * thunder_dist)) *
-					(0.5f + 0.8f * thunder_swell) * (1.0f - _smoothstep(dur * 0.6f, dur, T));
-			const float a = _lp_coef(Math::lerp(260.0f, 90.0f, thunder_dist), RATE);
-			const float n = _noise();
-			thunder_lp += (n - thunder_lp) * a;
-			thunder_lp2 += (thunder_lp - thunder_lp2) * a;
-			thunder_clp += (n - thunder_clp) * _lp_coef(2500.0f, RATE); // the crack: bright, not hissy
-			const float v = (thunder_lp2 / std::sqrt(a) * env * Math::lerp(1.0f, 0.45f, thunder_dist) * 1.3f + thunder_clp * crack * 2.0f) *
-					s->thunder_gain.load(std::memory_order_relaxed);
-			l += v;
-			r += v * 0.95f;
+		}
+		*slot = Thunder();
+		slot->active = true;
+		slot->t = -s->thunder_delay.load(std::memory_order_relaxed);
+		slot->dist = CLAMP(s->thunder_distance.load(std::memory_order_relaxed), 0.0f, 1.0f);
+	}
+	const float thunder_gain = s->thunder_gain.load(std::memory_order_relaxed);
+	for (Thunder &th : thunders) {
+		if (th.active) {
+			_thunder_frame(th, thunder_gain, l, r);
 		}
 	}
 
@@ -367,8 +365,73 @@ void AudioStreamPlaybackEdenAmbience::_frame(float &r_l, float &r_r) {
 	l += el * 0.3f;
 	r += er * 0.3f;
 
+	const float g = s->out_gain.load(std::memory_order_relaxed);
+	const float pan = s->out_pan.load(std::memory_order_relaxed);
+	if (cur_gain < 0.0f || snap_levels) {
+		cur_gain = g;
+		cur_pan = pan;
+	}
+	cur_gain += (g - cur_gain) * (dt / 0.08f);
+	cur_pan += (pan - cur_pan) * (dt / 0.08f);
+	// Balance, not a mono pan: the layers keep their stereo width, one side just drops away
+	l *= cur_gain * MIN(1.0f, 1.0f - cur_pan);
+	r *= cur_gain * MIN(1.0f, 1.0f + cur_pan);
 	r_l = std::tanh(l);
 	r_r = std::tanh(r);
+}
+
+// One thunder strike, modelled on a recorded close strike: a ~100 ms swell into a broadband crack (the first
+// ~0.2 s carries real energy above 2 kHz), a crackling "tearing" band at 200 Hz..2 kHz for about a second, and a
+// rolling rumble that starts bright and settles to ~150..400 Hz, swelling at random and decaying ~3 dB/s.
+// Far strikes (dist -> 1) keep only a slower, darker, shorter rumble: the soft low bumps under distant storms.
+void AudioStreamPlaybackEdenAmbience::_thunder_frame(Thunder &p_th, float p_gain, float &r_l, float &r_r) {
+	constexpr float dt = 1.0f / RATE;
+	p_th.t += dt;
+	const float T = p_th.t;
+	if (T < 0.0f) {
+		return;
+	}
+	const float near = (1.0f - p_th.dist) * (1.0f - p_th.dist);
+	const float dur = Math::lerp(3.5f, 10.0f, 1.0f - p_th.dist);
+	if (T > dur) {
+		p_th.active = false;
+		return;
+	}
+	// Crackle: fast random level jumps (the tearing texture), and slow swells (the roll)
+	if (_rand() < 45.0f * dt) {
+		p_th.crackle_target = 0.25f + 0.75f * Math::sqrt(_rand());
+	}
+	p_th.crackle += (p_th.crackle_target - p_th.crackle) * dt * 90.0f;
+	if (_rand() < 2.5f * dt) {
+		p_th.swell_target = _range(0.45f, 1.2f);
+	}
+	p_th.swell += (p_th.swell_target - p_th.swell) * dt * 3.0f;
+
+	const float attack = _smoothstep(0.0f, 0.1f + 0.5f * p_th.dist, T);
+	const float fade = 1.0f - _smoothstep(dur * 0.6f, dur, T);
+	const float rumble_env = std::exp(-T / Math::lerp(1.2f, 3.0f, 1.0f - p_th.dist)) * p_th.swell;
+	const float tear_env = near * std::exp(-T / 0.55f) * p_th.crackle;
+	const float crack_env = near * std::exp(-T / 0.12f) * (0.5f + 0.5f * p_th.crackle);
+	// Rumble brightness: sweeps down from ~900 Hz (near) and settles; far strikes stay dark
+	const float fc = Math::lerp(140.0f, 280.0f, 1.0f - p_th.dist) + 650.0f * near * std::exp(-T / 0.7f);
+	const float a = _lp_coef(fc, RATE);
+	const float a_sub = _lp_coef(70.0f, RATE);
+	const float a_t_hp = _lp_coef(200.0f, RATE), a_t_lp = _lp_coef(2000.0f, RATE), a_c = _lp_coef(1500.0f, RATE);
+	const float level = attack * fade * p_gain * Math::lerp(0.8f, 2.6f, near);
+	for (int c = 0; c < 2; c++) {
+		const float n = _noise();
+		p_th.lp[c] += (n - p_th.lp[c]) * a;
+		p_th.lp2[c] += (p_th.lp[c] - p_th.lp2[c]) * a;
+		p_th.sub[c] += (n - p_th.sub[c]) * a_sub;
+		p_th.tear_hp[c] += (n - p_th.tear_hp[c]) * a_t_hp;
+		p_th.tear_lp[c] += ((n - p_th.tear_hp[c]) - p_th.tear_lp[c]) * a_t_lp;
+		p_th.crack_lp[c] += (n - p_th.crack_lp[c]) * a_c;
+		const float rumble = p_th.lp2[c] / std::sqrt(a) * 0.42f + p_th.sub[c] / std::sqrt(a_sub) * 0.25f;
+		const float tear = p_th.tear_lp[c] * 1.6f;
+		const float crack = (n - p_th.crack_lp[c]) * 0.9f;
+		const float v = (rumble * rumble_env + tear * tear_env + crack * crack_env) * level;
+		(c == 0 ? r_l : r_r) += v;
+	}
 }
 
 int AudioStreamPlaybackEdenAmbience::_mix_internal(AudioFrame *p_buffer, int p_frames) {

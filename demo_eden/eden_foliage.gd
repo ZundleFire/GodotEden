@@ -96,6 +96,7 @@ const MATERIAL_BITS := 6 # EdenFoliageLayer/Biome material flags: grass, rock, s
 var _grass_materials: Array[ShaderMaterial] = []
 var _ring_materials := {} # [sways, inner, outer] -> ShaderMaterial
 var _signature := 0
+var _forest_mask: FastNoiseLite
 var _next_check_ms := 0
 
 
@@ -127,6 +128,7 @@ func _process(_delta: float) -> void:
 func _config_signature() -> int:
 	var values := []
 	var cfg := _get_config()
+	values.append([cfg.forest_patch_size, cfg.forest_coverage, cfg.forest_edge, cfg.forest_seed])
 	for b in cfg.biomes:
 		if b == null:
 			continue
@@ -193,7 +195,9 @@ func build_library() -> VoxelInstanceLibrary:
 				g.vertical_alignment = layer.vertical_alignment
 				# Sink is in metres at scale 1: bigger instances sink proportionally deeper
 				g.offset_along_normal = layer.sink * (size.x + size.y) * 0.5
-				if layer.clump_size > 0.0:
+				if layer.placement == EdenFoliageLayer.Placement.FOREST:
+					_add_forest_mask(g)
+				elif layer.clump_size > 0.0:
 					_add_clumping(g, base, layer.clump_size)
 				var item_name := "%s/%s_%d" % [biome.name, layer.name, v]
 				var item: VoxelInstanceLibraryMultiMeshItem
@@ -246,7 +250,9 @@ func _add_far_tiers(lib: VoxelInstanceLibrary, used: Dictionary, biome: EdenFoli
 			g.max_scale = s.y
 			g.vertical_alignment = layer.vertical_alignment
 			g.offset_along_normal = layer.sink * (s.x + s.y) * 0.5
-			if layer.clump_size > 0.0:
+			if layer.placement == EdenFoliageLayer.Placement.FOREST:
+				_add_forest_mask(g)
+			elif layer.clump_size > 0.0:
 				_add_clumping(g, base, layer.clump_size)
 			var mesh := EdenFoliageMeshes.build_far(layer, v, res)
 			var item := VoxelInstanceLibraryMultiMeshItem.new()
@@ -322,6 +328,49 @@ func _gen(density: float, temperature: Vector2, moisture: Vector2, materials: Ar
 
 
 # Forest clumps: a noise field thins instances between patches instead of a uniform sprinkle
+# Forest layers share one mask (same seed and scale), so the trees, bushes and ferns of a forest line up
+func _forest_noise() -> FastNoiseLite:
+	var cfg := _get_config()
+	if _forest_mask == null:
+		_forest_mask = FastNoiseLite.new()
+	_forest_mask.seed = 9000 + cfg.forest_seed
+	_forest_mask.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	_forest_mask.frequency = 1.0 / maxf(cfg.forest_patch_size, 1.0)
+	return _forest_mask
+
+
+func _forest_threshold() -> float:
+	return (_get_config().forest_coverage - 0.5) * 0.8
+
+
+func _add_forest_mask(g: VoxelInstanceGenerator) -> void:
+	g.noise = _forest_noise()
+	g.noise_dimension = VoxelInstanceGenerator.DIMENSION_3D
+	g.noise_threshold = _forest_threshold()
+	g.noise_falloff = _get_config().forest_edge
+
+
+## How much forest grows at a world position (0..1): the instancer's own keep probability for forest layers
+## there (same noise, threshold and falloff), zero where no biome with forest layers fits the climate or under
+## the sea. EdenAmbience places forest sounds and falling leaves with it.
+func get_forest_density(world_position: Vector3) -> float:
+	var terrain := get_parent() as VoxelLodTerrain
+	if terrain == null:
+		return 0.0
+	if _forest_mask == null:
+		_forest_noise()
+	var local := world_position - (terrain.global_position if terrain.is_inside_tree() else terrain.position)
+	var n := _forest_mask.get_noise_3dv(local) + _forest_threshold()
+	var keep := clampf(n / maxf(_get_config().forest_edge, 1e-3), 0.0, 1.0)
+	keep *= keep
+	if keep <= 0.0 or not terrain.generator or not terrain.generator.has_method("sample_surface"):
+		return 0.0
+	var s: Dictionary = terrain.generator.sample_surface(local.normalized())
+	if float(s.get("height", 0.0)) <= 0.0 or not _get_config().forest_climate(float(s.temperature), float(s.moisture)):
+		return 0.0
+	return keep
+
+
 func _add_clumping(g: VoxelInstanceGenerator, noise_seed: int, patch_size: float) -> void:
 	var noise := FastNoiseLite.new()
 	noise.seed = 4000 + noise_seed # shared by a layer's variants

@@ -6,6 +6,7 @@
 #include "scene/3d/camera_3d.h"
 #include "scene/3d/gpu_particles_3d.h"
 #include "scene/3d/light_3d.h"
+#include "scene/3d/mesh_instance_3d.h"
 #include "scene/audio/audio_stream_player.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/3d/primitive_meshes.h"
@@ -69,7 +70,7 @@ Node *EdenAmbience::_get_atmosphere() const {
 	return found;
 }
 
-bool EdenAmbience::_get_camera(Vector3 &r_pos) const {
+bool EdenAmbience::_get_camera(Vector3 &r_pos, Basis *r_basis) const {
 #ifdef TOOLS_ENABLED
 	// Not playing: follow the editor's own 3D view camera
 	if (Engine::get_singleton()->is_editor_hint()) {
@@ -78,6 +79,9 @@ bool EdenAmbience::_get_camera(Vector3 &r_pos) const {
 		Camera3D *cam = vp ? vp->get_camera_3d() : nullptr;
 		if (cam != nullptr) {
 			r_pos = cam->get_global_position();
+			if (r_basis) {
+				*r_basis = cam->get_global_basis();
+			}
 			return true;
 		}
 	}
@@ -88,6 +92,9 @@ bool EdenAmbience::_get_camera(Vector3 &r_pos) const {
 		return false;
 	}
 	r_pos = cam->get_global_position();
+	if (r_basis) {
+		*r_basis = cam->get_global_basis();
+	}
 	return true;
 }
 
@@ -187,6 +194,186 @@ void EdenAmbience::_build() {
 	player->set_name("Soundscape");
 	player->set_stream(soundscape);
 	add_child(player, false, INTERNAL_MODE_BACK);
+
+	for (int i = 0; i < SURF_EMITTERS + LEAF_EMITTERS; i++) {
+		const bool surf = i < SURF_EMITTERS;
+		Emitter &e = surf ? surf_emitters[i] : leaf_emitters[i - SURF_EMITTERS];
+		e.layer = surf ? AudioStreamEdenAmbience::LAYER_SURF : AudioStreamEdenAmbience::LAYER_LEAVES;
+		e.stream.instantiate();
+		AudioStreamPlayer *p = memnew(AudioStreamPlayer);
+		p->set_name(surf ? "Surf" : "Leaves");
+		p->set_stream(e.stream);
+		add_child(p, false, INTERNAL_MODE_BACK);
+		e.player = p;
+	}
+}
+
+static Node *_find_method(Node *p_node, const StringName &p_method) {
+	if (p_node == nullptr) {
+		return nullptr;
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		if (p_node->get_child(i)->has_method(p_method)) {
+			return p_node->get_child(i);
+		}
+	}
+	return nullptr;
+}
+
+// Samples the terrain on rings around the camera: surf goes where the ground crosses sea level (the nearest
+// shoreline along each bearing), rustling where EdenFoliage reports dense forest. Each kind keeps its nearest
+// sources, spread over different bearings.
+void EdenAmbience::_find_sound_sources(const Vector3 &p_cam) {
+	Node3D *planet = _get_planet();
+	Object *gen = planet ? (Object *)planet->get("generator") : nullptr;
+	if (gen == nullptr || !gen->has_method("sample_surface") || !state.valid) {
+		return;
+	}
+	Node *foliage = _find_method(planet, "get_forest_density");
+	const float R = state.planet_radius;
+	const Vector3 up = (p_cam - state.center).normalized();
+	const Vector3 t = up.cross(Math::abs(up.y) < 0.99f ? Vector3(0, 1, 0) : Vector3(1, 0, 0)).normalized();
+	const Vector3 b = up.cross(t);
+	const bool cam_water = state.ground_height < 0.0f;
+	static const float radii[] = { 10.0f, 25.0f, 50.0f, 90.0f, 150.0f, 240.0f, 350.0f, 550.0f, 800.0f };
+	const int AZ = 16;
+	struct Cand {
+		Vector3 pos;
+		float dist, az, strength;
+	};
+	LocalVector<Cand> shore, forest;
+	forest_here = -1.0f;
+	if (foliage != nullptr) {
+		forest_here = foliage->call("get_forest_density", state.center + up * (R + MAX(state.ground_height, 0.0f)));
+	}
+	for (int a = 0; a < AZ; a++) {
+		const float az = Math::TAU * a / AZ;
+		const Vector3 tangent = t * Math::cos(az) + b * Math::sin(az);
+		bool prev_water = cam_water;
+		float prev_r = 0.0f;
+		bool shore_found = false;
+		for (float r : radii) {
+			const bool want_shore = !shore_found && r <= surf_range * 1.6f;
+			const bool want_forest = foliage != nullptr && r <= forest_sound_range;
+			if (!want_shore && !want_forest) {
+				break;
+			}
+			const Vector3 dir = (up + tangent * (r / R)).normalized();
+			const Dictionary s = gen->call("sample_surface", dir);
+			const float h = s.get("height", 0.0f);
+			const bool water = h < 0.0f;
+			if (want_shore && water != prev_water) {
+				const float mid = (prev_r + r) * 0.5f;
+				if (mid <= surf_range) {
+					const Vector3 sdir = (up + tangent * (mid / R)).normalized();
+					shore.push_back({ state.center + sdir * (R + 0.5f), mid, az, 1.0f });
+				}
+				shore_found = true;
+			}
+			prev_water = water;
+			prev_r = r;
+			if (want_forest && !water) {
+				const float f = foliage->call("get_forest_density", state.center + dir * (R + h));
+				if (f > 0.15f) {
+					forest.push_back({ state.center + dir * (R + h + 6.0f), r, az, f }); // in the canopy
+					if (r <= 25.0f) {
+						forest_here = MAX(forest_here, f);
+					}
+				}
+			}
+		}
+	}
+	// Nearest first, spread over bearings, then fill the emitters (unused ones fade out where they are)
+	auto pick = [](LocalVector<Cand> &p_cands, Emitter *p_emitters, int p_count, float p_min_sep) {
+		// Selection sort by distance with a bearing-separation check (candidate lists are small)
+		LocalVector<Cand> chosen;
+		LocalVector<bool> taken;
+		taken.resize(p_cands.size());
+		for (uint32_t i = 0; i < taken.size(); i++) {
+			taken[i] = false;
+		}
+		while ((int)chosen.size() < p_count) {
+			int best = -1;
+			for (uint32_t i = 0; i < p_cands.size(); i++) {
+				if (taken[i] || (best >= 0 && p_cands[i].dist >= p_cands[best].dist)) {
+					continue;
+				}
+				bool clash = false;
+				for (const Cand &c : chosen) {
+					clash = clash || Math::abs(Math::angle_difference(p_cands[i].az, c.az)) < p_min_sep;
+				}
+				if (!clash) {
+					best = i;
+				}
+			}
+			if (best < 0) {
+				break;
+			}
+			taken[best] = true;
+			chosen.push_back(p_cands[best]);
+		}
+		// Keep each emitter on the chosen source nearest to where it already is, so they don't jump around
+		LocalVector<bool> done;
+		done.resize(chosen.size());
+		for (uint32_t i = 0; i < done.size(); i++) {
+			done[i] = false;
+		}
+		for (int k = 0; k < p_count; k++) {
+			Emitter &e = p_emitters[k];
+			int best = -1;
+			for (uint32_t i = 0; i < chosen.size(); i++) {
+				if (!done[i] && (best < 0 || chosen[i].pos.distance_squared_to(e.target) < chosen[best].pos.distance_squared_to(e.target))) {
+					best = i;
+				}
+			}
+			if (best < 0) {
+				e.target_level = 0.0f;
+				continue;
+			}
+			done[best] = true;
+			e.target = chosen[best].pos;
+			e.target_level = chosen[best].strength;
+		}
+	};
+	pick(shore, surf_emitters, SURF_EMITTERS, Math::deg_to_rad(60.0f));
+	pick(forest, leaf_emitters, LEAF_EMITTERS, Math::deg_to_rad(50.0f));
+}
+
+void EdenAmbience::_update_emitters(double p_delta, bool p_play, float p_wind, const Vector3 &p_cam, const Basis &p_cam_basis) {
+	const float ease_level = 1.0f - Math::exp(-(float)p_delta / 1.5f);
+	const float ease_pos = 1.0f - Math::exp(-(float)p_delta / 1.0f);
+	for (int i = 0; i < SURF_EMITTERS + LEAF_EMITTERS; i++) {
+		const bool surf = i < SURF_EMITTERS;
+		Emitter &e = surf ? surf_emitters[i] : leaf_emitters[i - SURF_EMITTERS];
+		if (e.player == nullptr) {
+			continue;
+		}
+		const float target = spatial_audio ? e.target_level : 0.0f;
+		// A silent emitter jumps straight to its new source; an audible one glides there
+		e.pos = e.level < 0.02f ? e.target : e.pos.lerp(e.target, ease_pos);
+		e.level = Math::lerp(e.level, target, ease_level);
+		// Inverse-distance falloff from unit_size (as AudioStreamPlayer3D's default model), a little quieter
+		// behind the camera, and balance toward the side the source is on
+		const Vector3 rel = e.pos - p_cam;
+		const float d = rel.length();
+		const float unit = surf ? surf_unit_size : leaves_unit_size;
+		const float max_d = surf ? surf_range * 3.0f : forest_sound_range * 3.0f;
+		const Vector3 local = p_cam_basis.xform_inv(rel); // +x right, -z ahead
+		const float behind = d > 1e-3f ? MAX(local.z / d, 0.0f) : 0.0f;
+		const float att = unit / MAX(unit, d) * (1.0f - _smoothstep(max_d * 0.7f, max_d, d)) * (1.0f - 0.25f * behind);
+		e.stream->out_gain.store(att);
+		e.stream->out_pan.store(d > 0.5f ? CLAMP(local.x / d, -1.0f, 1.0f) * 0.85f : 0.0f);
+		e.player->set_volume_db(volume_db);
+		const float gain = surf ? surf_volume : leaves_volume * CLAMP(p_wind / 4.0f, 0.2f, 1.0f);
+		e.stream->set_level(e.layer, e.level * gain);
+		e.stream->gustiness.store(gustiness);
+		const bool play = p_play && e.level > 0.002f;
+		if (play && !e.player->is_playing()) {
+			e.player->play();
+		} else if (!play && e.player->is_playing()) {
+			e.player->stop();
+		}
+	}
 }
 
 // Sizes, ranges and fixed colours from the exports (the per-frame, biome-driven ones are set in _update)
@@ -346,7 +533,6 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 	if (!weather_enabled || !state.valid) {
 		local = EdenWeatherSim::Sample();
 		local_snow = local_wet = local_freezing = 0.0f;
-		flash = 0.0f;
 		rs->global_shader_parameter_set("eden_weather_planet", Vector4(0, 0, 0, 0));
 		return;
 	}
@@ -443,16 +629,174 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 		}
 	}
 
-	// Lightning in thunder cells: a flash now, its thunder later (sound covers ~340 m/s)
-	flash *= Math::exp(-(float)p_delta * 14.0f);
+	// Lightning in thunder cells: strikes around the camera (see _strike: bolt, light, cloud glow, thunder)
 	if (lightning_enabled && local.thunder) {
 		strike_timer -= (float)p_delta * weather_time_scale * lightning_frequency * (0.5f + local.precipitation);
 		if (strike_timer <= 0.0f) {
 			strike_timer = Math::random(3.0f, 14.0f);
-			const float dist = Math::randf(); // 0 overhead .. 1 ~3 km away
-			flash = MAX(flash, Math::lerp(1.0f, 0.2f, dist));
-			lightning_strikes++;
-			soundscape->trigger_thunder(0.1f + dist * 3000.0f / 340.0f, dist);
+			Vector3 ground;
+			if (_pick_strike_point(ground)) {
+				_strike(ground, Math::randf() < intra_cloud_chance);
+			}
+		}
+	}
+}
+
+// Somewhere within the lightning distance range, biased into the camera's view so strikes get seen
+bool EdenAmbience::_pick_strike_point(Vector3 &r_ground) const {
+	Node3D *planet = _get_planet();
+	Object *gen = planet ? (Object *)planet->get("generator") : nullptr;
+	Vector3 cam;
+	if (!state.valid || !_get_camera(cam)) {
+		return false;
+	}
+	const float R = state.planet_radius;
+	const Vector3 up = (cam - state.center).normalized();
+	Vector3 fwd = cam_forward - up * cam_forward.dot(up);
+	fwd = fwd.length_squared() > 1e-6f ? fwd.normalized() : up.get_any_perpendicular();
+	float bearing = (Math::randf() * 2.0f - 1.0f) * Math::deg_to_rad(Math::randf() < lightning_view_bias ? 55.0f : 180.0f);
+	const Vector3 tangent = fwd.rotated(up, bearing);
+	const float dist = Math::lerp(lightning_min_distance, MAX(lightning_max_distance, lightning_min_distance), Math::pow(Math::randf(), 1.3f));
+	const Vector3 dir = (up + tangent * (dist / R)).normalized();
+	float h = 0.0f;
+	if (gen != nullptr && gen->has_method("sample_surface")) {
+		h = (float)((Dictionary)gen->call("sample_surface", dir)).get("height", 0.0f);
+	}
+	r_ground = state.center + dir * (R + MAX(h, 0.0f));
+	return true;
+}
+
+void EdenAmbience::strike_lightning(const Vector3 &p_world_position, bool p_cloud_only) {
+	Vector3 ground = p_world_position;
+	if (ground == Vector3() && !_pick_strike_point(ground)) {
+		return;
+	}
+	_strike(ground, p_cloud_only);
+}
+
+void EdenAmbience::_strike(const Vector3 &p_ground, bool p_cloud_only) {
+	Node3D *planet = _get_planet();
+	if (planet == nullptr || state.planet_radius <= 0.0f) {
+		return;
+	}
+	if (bolt_shader.is_null()) {
+		bolt_shader.instantiate();
+		bolt_shader->set_code(EDEN_LIGHTNING_SHADER);
+		bolt_rng.seed(Math::rand());
+	}
+	const float R = state.planet_radius;
+	const Vector3 up = (p_ground - state.center).normalized();
+	// From the cloud base (EdenCloudShell's, when there is one) straight-ish down to the strike point
+	float cloud_base = 1500.0f;
+	Node *clouds = _find_class(planet, "EdenCloudShell", 0);
+	if (clouds != nullptr) {
+		cloud_base = clouds->get("cloud_bottom");
+	}
+	const float ground_alt = (p_ground - state.center).length() - R;
+	const Vector3 side = up.get_any_perpendicular().rotated(up, bolt_rng.randf() * Math::TAU);
+	const Vector3 top = state.center + up * (R + MAX(cloud_base, ground_alt + 400.0f)) + side * (bolt_rng.randf() * 300.0f);
+
+	// A free slot, else the one furthest through its strike
+	Strike *s = &bolts[0];
+	for (Strike &b : bolts) {
+		if (b.t < 0.0f || b.t > s->t) {
+			s = &b;
+			if (b.t < 0.0f) {
+				break;
+			}
+		}
+	}
+	if (s->mesh == nullptr) {
+		s->material.instantiate();
+		s->material->set_shader(bolt_shader);
+		s->mesh = memnew(MeshInstance3D);
+		s->mesh->set_name("Lightning");
+		s->mesh->set_as_top_level(true);
+		s->mesh->set_cast_shadows_setting(GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+		s->mesh->set_material_override(s->material);
+		add_child(s->mesh, false, INTERNAL_MODE_BACK);
+		s->light = memnew(OmniLight3D);
+		s->light->set_name("LightningLight");
+		s->light->set_as_top_level(true);
+		s->light->set_shadow(false);
+		// No distance falloff inside its range: a flash that lights the whole area, not a bulb 150 m up
+		s->light->set_param(Light3D::PARAM_ATTENUATION, 0.0f);
+		add_child(s->light, false, INTERNAL_MODE_BACK);
+	}
+	s->bolt.plan_strokes(bolt_rng);
+	s->top = top;
+	s->ground = p_ground;
+	s->cloud_only = p_cloud_only;
+	s->t = 0.0f;
+	Vector3 cam;
+	s->distance = _get_camera(cam) ? cam.distance_to(p_ground) : lightning_max_distance;
+	if (!p_cloud_only) {
+		s->mesh->set_mesh(EdenLightningBolt::build_mesh(top, p_ground, up, bolt_width, bolt_rng));
+		s->mesh->set_global_position(top);
+	}
+	s->mesh->set_visible(!p_cloud_only);
+	// Lights the land around the strike (or the cloud from inside)
+	const float height = top.distance_to(p_ground);
+	s->light->set_global_position(p_cloud_only ? top : p_ground + up * MIN(150.0f, height * 0.2f));
+	// Each strike its own colour from the palette (bolt_color when it is empty)
+	s->color = bolt_colors.is_empty() ? bolt_color : bolt_colors[bolt_rng.rand() % bolt_colors.size()];
+	s->light->set_color(s->color);
+	s->light->set_param(Light3D::PARAM_RANGE, lightning_light_range);
+	s->light->set_visible(false);
+	lightning_strikes++;
+	// Thunder: after the sound's travel time, darker and softer with distance (and muffled inside cloud)
+	const float thunder_dist = CLAMP(s->distance / MAX(lightning_max_distance, 1.0f) + (p_cloud_only ? 0.25f : 0.0f), 0.0f, 1.0f);
+	soundscape->trigger_thunder(s->distance / 340.0f, thunder_dist);
+}
+
+void EdenAmbience::_update_bolts(double p_delta, const Vector3 &p_cam) {
+	float sky = 0.0f;
+	float cloud = 0.0f;
+	Vector3 cloud_pos;
+	for (Strike &s : bolts) {
+		if (s.t < 0.0f || s.mesh == nullptr) {
+			continue;
+		}
+		s.t += (float)p_delta;
+		if (s.t > s.bolt.end_time) {
+			s.t = -1.0f;
+			s.mesh->set_visible(false);
+			s.light->set_visible(false);
+			continue;
+		}
+		const float f = s.bolt.flash_at(s.t);
+		s.material->set_shader_parameter("flash", f);
+		s.material->set_shader_parameter("reveal", s.bolt.reveal_at(s.t));
+		s.material->set_shader_parameter("bolt_color", s.color);
+		s.material->set_shader_parameter("intensity", bolt_brightness);
+		const float d = p_cam.distance_to(s.ground);
+		const bool lit = f > 0.02f && d < lightning_light_range * 2.0f;
+		if (s.light->is_visible() != lit) {
+			s.light->set_visible(lit);
+		}
+		s.light->set_param(Light3D::PARAM_ENERGY, f * lightning_light_energy);
+		// The sky flash fades with distance; flashes inside cloud are softer
+		const float near = 1.0f - _smoothstep(0.2f, 1.0f, d / MAX(lightning_max_distance, 1.0f)) * 0.75f;
+		const float strength = f * near * (s.cloud_only ? 0.6f : 1.0f);
+		sky = MAX(sky, strength);
+		if (f * cloud_flash_brightness > cloud) {
+			cloud = f * cloud_flash_brightness;
+			cloud_pos = s.top - state.center;
+			cloud_flash_color = s.color;
+		}
+	}
+	flash = sky;
+	// Clouds glow around the strike
+	if (cloud > 0.0f || cloud_flash > 0.0f) {
+		cloud_flash = cloud;
+		Node *clouds = _find_class(_get_planet(), "EdenCloudShell", 0);
+		Ref<ShaderMaterial> m = clouds ? Ref<ShaderMaterial>(clouds->call("get_material")) : Ref<ShaderMaterial>();
+		if (m.is_valid()) {
+			m->set_shader_parameter("lightning_flash", cloud);
+			if (cloud > 0.0f) {
+				m->set_shader_parameter("lightning_pos", cloud_pos);
+				m->set_shader_parameter("lightning_color", cloud_flash_color);
+			}
 		}
 	}
 }
@@ -460,11 +804,20 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 void EdenAmbience::_update(double p_delta) {
 	time += p_delta;
 	Vector3 cam;
-	const bool have_cam = _get_camera(cam);
+	Basis cam_basis;
+	const bool have_cam = _get_camera(cam, &cam_basis);
+	if (have_cam) {
+		cam_forward = -cam_basis.get_column(2);
+	}
 	survey_timer -= (float)p_delta;
 	if (have_cam && survey_timer <= 0.0f) {
 		survey_timer = 0.3f;
 		_survey(cam);
+	}
+	source_timer -= (float)p_delta;
+	if (have_cam && source_timer <= 0.0f && (spatial_audio || biome_effects_enabled)) {
+		source_timer = 1.0f;
+		_find_sound_sources(cam);
 	}
 
 	const bool on = have_cam && state.valid;
@@ -475,6 +828,7 @@ void EdenAmbience::_update(double p_delta) {
 		sun_dir = atmo->call("get_sun_direction");
 	}
 	_update_weather(p_delta, cam, sun_dir);
+	_update_bolts(p_delta, cam);
 	_apply_look();
 
 	if (fx_dirty) {
@@ -522,7 +876,7 @@ void EdenAmbience::_update(double p_delta) {
 		ratio[FX_SNOW] = snow_amount * (precip * local_freezing + 0.25f * cold * local.cloud) * (1.0f - _smoothstep(800.0f, 3000.0f, state.altitude));
 		ratio[FX_RAIN] = rain_amount * (1.0f - cold) + precip * (1.0f - local_freezing);
 		if (biomes) {
-			ratio[FX_LEAVES] = leaves_amount * b_forest * (1.0f - cold) * (1.0f - 0.8f * b_coast) * near_ground * _smoothstep(0.5f, 4.0f, wind_now) * (1.0f - precip * 0.5f);
+			ratio[FX_LEAVES] = leaves_amount * (forest_here >= 0.0f ? forest_here : b_forest) * (1.0f - cold) * (1.0f - 0.8f * b_coast) * near_ground * _smoothstep(0.5f, 4.0f, wind_now) * (1.0f - precip * 0.5f);
 			ratio[FX_DUST] = dust_amount * near_ground * MAX(b_desert * _smoothstep(dust_wind_threshold, dust_wind_threshold * 2.5f, wind_now), dust_storm);
 		}
 	}
@@ -633,8 +987,10 @@ void EdenAmbience::_update(double p_delta) {
 #endif
 		const float sea_alt = on ? (cam - state.center).length() - state.planet_radius : 1e9f;
 		soundscape->set_level(AudioStreamEdenAmbience::LAYER_WIND, wind_volume * (0.3f + 0.45f * _smoothstep(0.0f, 1500.0f, state.altitude) + 0.25f * CLAMP(wind_now / 10.0f, 0.0f, 1.0f) + 0.5f * dust_storm));
-		soundscape->set_level(AudioStreamEdenAmbience::LAYER_LEAVES, leaves_volume * vegetation * near_ground * CLAMP(wind_now / 4.0f, 0.2f, 1.0f));
-		soundscape->set_level(AudioStreamEdenAmbience::LAYER_SURF, surf_volume * state.water * (1.0f - _smoothstep(20.0f, 250.0f, sea_alt)));
+		// With spatial audio, surf and leaves come from 3D emitters at their sources instead
+		const float flat = spatial_audio ? 0.0f : 1.0f;
+		soundscape->set_level(AudioStreamEdenAmbience::LAYER_LEAVES, flat * leaves_volume * vegetation * near_ground * CLAMP(wind_now / 4.0f, 0.2f, 1.0f));
+		soundscape->set_level(AudioStreamEdenAmbience::LAYER_SURF, flat * surf_volume * state.water * (1.0f - _smoothstep(20.0f, 250.0f, sea_alt)));
 		soundscape->set_level(AudioStreamEdenAmbience::LAYER_BIRDS, birds_volume * state.day * vegetation * near_ground * (1.0f - precip));
 		soundscape->set_level(AudioStreamEdenAmbience::LAYER_CRICKETS, crickets_volume * state.night * warm * near_ground * (0.3f + 0.7f * vegetation) * (1.0f - 0.8f * precip));
 		soundscape->set_level(AudioStreamEdenAmbience::LAYER_RAIN, rain_volume * CLAMP(ratio[FX_RAIN], 0.0f, 1.0f) * (1.0f - _smoothstep(200.0f, 1500.0f, state.altitude)));
@@ -646,6 +1002,7 @@ void EdenAmbience::_update(double p_delta) {
 		} else if (!want && player->is_playing()) {
 			player->stop();
 		}
+		_update_emitters(p_delta, want, wind_now, cam, cam_basis);
 	}
 }
 
@@ -820,6 +1177,18 @@ Dictionary EdenAmbience::get_debug_state() const {
 	d["wetness"] = local_wet;
 	d["freezing"] = local_freezing;
 	d["climate_ready"] = weather.is_climate_ready();
+	d["forest_here"] = forest_here;
+	Array sources;
+	for (int i = 0; i < SURF_EMITTERS + LEAF_EMITTERS; i++) {
+		const Emitter &e = i < SURF_EMITTERS ? surf_emitters[i] : leaf_emitters[i - SURF_EMITTERS];
+		Dictionary src;
+		src["kind"] = i < SURF_EMITTERS ? "surf" : "leaves";
+		src["level"] = e.level;
+		src["target_level"] = e.target_level;
+		src["position"] = e.target;
+		sources.push_back(src);
+	}
+	d["sound_sources"] = sources;
 	d["dust_storm"] = local.dust;
 	Dictionary b;
 	b["desert"] = biome_weights.x;
@@ -828,6 +1197,12 @@ Dictionary EdenAmbience::get_debug_state() const {
 	b["coast"] = biome_weights.w;
 	d["biome"] = b;
 	d["lightning_strikes"] = lightning_strikes;
+	int active = 0;
+	for (const Strike &s : bolts) {
+		active += s.t >= 0.0f ? 1 : 0;
+	}
+	d["active_bolts"] = active;
+	d["flash"] = flash;
 	return d;
 }
 
@@ -847,6 +1222,7 @@ void EdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_weather_at", "world_position"), &EdenAmbience::get_weather_at);
 	ClassDB::bind_method(D_METHOD("add_storm", "world_position", "radius", "intensity", "duration", "thunder", "dust"), &EdenAmbience::add_storm, DEFVAL(false), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("clear_snow_and_wetness"), &EdenAmbience::clear_snow_and_wetness);
+	ClassDB::bind_method(D_METHOD("strike_lightning", "world_position", "cloud_only"), &EdenAmbience::strike_lightning, DEFVAL(Vector3()), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("get_weather_texture"), &EdenAmbience::get_weather_texture);
 
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "planet_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "Node3D"), "set_planet_path", "get_planet_path");

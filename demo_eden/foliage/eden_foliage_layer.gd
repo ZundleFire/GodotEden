@@ -37,6 +37,10 @@ enum Kind {
 @export_flags("Grass", "Rock", "Snow", "Sand", "Dirt", "Moss") var materials := 0
 
 @export_group("Placement")
+enum Placement { ANYWHERE, FOREST }
+## Forest: only inside the config's forest patches (one shared mask for every forest layer, so trees and their
+## undergrowth line up), ignoring clump_size. Use it for the dense trees, bushes and ferns of a forest.
+@export var placement := Placement.ANYWHERE
 ## 0 = aligned with the surface normal (rocks in cliffs), 1 = world-up relative to the planet.
 @export_range(0.0, 1.0, 0.01) var vertical_alignment := 1.0
 ## Pushes instances into the ground (negative) along the normal, in metres at scale 1 (so as a fraction of a

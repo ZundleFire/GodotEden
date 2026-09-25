@@ -1,8 +1,8 @@
 [gd_resource type="Resource" script_class="EdenFoliageConfig" format=3 uid="uid://p5u8mxk0bux2"]
 
-[ext_resource type="Script" uid="uid://ro4kr103yax8" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
-[ext_resource type="Script" uid="uid://ekresl7y7y64" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
-[ext_resource type="Script" uid="uid://dcq0ig3lfvu7x" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
+[ext_resource type="Script" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
+[ext_resource type="Script" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
+[ext_resource type="Script" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
 
 [sub_resource type="Resource" id="Resource_uyh1r"]
 script = ExtResource("2_p1eig")
@@ -130,13 +130,100 @@ vertical_alignment = 0.2
 draw_distance = 150.0
 collision = true
 
+[sub_resource type="Resource" id="Resource_y1pxh"]
+script = ExtResource("2_p1eig")
+name = "Forest oak"
+kind = 2
+variants = 3
+density = 0.012
+scale_min = 2.2
+scale_max = 3.4
+clump_size = 150.0
+temperature = Vector2(0.42, 1)
+slope = Vector2(0, 30)
+materials = 49
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_p1eig"]
+script = ExtResource("2_p1eig")
+name = "Forest birch"
+kind = 4
+variants = 3
+density = 0.011
+scale_min = 2.0
+scale_max = 3.2
+clump_size = 150.0
+temperature = Vector2(0, 0.6)
+slope = Vector2(0, 30)
+materials = 49
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_nll8y"]
+script = ExtResource("2_p1eig")
+name = "Forest willow"
+kind = 5
+variants = 3
+density = 0.005
+scale_min = 2.0
+scale_max = 2.8
+clump_size = 150.0
+moisture = Vector2(0.7, 1)
+slope = Vector2(0, 30)
+materials = 49
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_4il6k"]
+script = ExtResource("2_p1eig")
+name = "Undergrowth"
+kind = 9
+variants = 1
+density = 0.04
+scale_min = 0.7
+scale_max = 1.5
+materials = 49
+placement = 1
+draw_distance = 70.0
+
+[sub_resource type="Resource" id="Resource_enhsa"]
+script = ExtResource("2_p1eig")
+name = "Forest ferns"
+kind = 10
+variants = 1
+density = 0.05
+scale_min = 0.7
+scale_max = 1.4
+materials = 49
+placement = 1
+draw_distance = 45.0
+
+[sub_resource type="Resource" id="Resource_2y1tl"]
+script = ExtResource("2_p1eig")
+name = "Forest berries"
+kind = 14
+variants = 1
+density = 0.012
+scale_min = 0.7
+scale_max = 1.2
+materials = 49
+placement = 1
+draw_distance = 60.0
+
 [sub_resource type="Resource" id="Resource_2rkrs"]
 script = ExtResource("1_y1pxh")
 name = "Temperate"
 temperature = Vector2(0.35, 0.8)
 moisture = Vector2(0.35, 1)
 materials = 49
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_uyh1r"), SubResource("Resource_xfqtm"), SubResource("Resource_vwwki"), SubResource("Resource_c862y"), SubResource("Resource_6ra4n"), SubResource("Resource_epmat"), SubResource("Resource_a7617"), SubResource("Resource_n7l64"), SubResource("Resource_uo2rn"), SubResource("Resource_2xjvs")])
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_uyh1r"), SubResource("Resource_xfqtm"), SubResource("Resource_vwwki"), SubResource("Resource_c862y"), SubResource("Resource_6ra4n"), SubResource("Resource_epmat"), SubResource("Resource_a7617"), SubResource("Resource_n7l64"), SubResource("Resource_uo2rn"), SubResource("Resource_2xjvs"), SubResource("Resource_y1pxh"), SubResource("Resource_p1eig"), SubResource("Resource_nll8y"), SubResource("Resource_4il6k"), SubResource("Resource_enhsa"), SubResource("Resource_2y1tl")])
 
 [sub_resource type="Resource" id="Resource_7h56b"]
 script = ExtResource("2_p1eig")
@@ -213,13 +300,54 @@ vertical_alignment = 0.2
 draw_distance = 150.0
 collision = true
 
+[sub_resource type="Resource" id="Resource_qq5rd"]
+script = ExtResource("2_p1eig")
+name = "Forest pine"
+kind = 3
+variants = 3
+density = 0.022
+scale_min = 2.2
+scale_max = 3.8
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 53
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_rgacn"]
+script = ExtResource("2_p1eig")
+name = "Undergrowth"
+kind = 9
+variants = 1
+density = 0.025
+scale_min = 0.6
+scale_max = 1.2
+materials = 49
+placement = 1
+draw_distance = 70.0
+
+[sub_resource type="Resource" id="Resource_8xek2"]
+script = ExtResource("2_p1eig")
+name = "Forest ferns"
+kind = 10
+variants = 1
+density = 0.03
+scale_min = 0.6
+scale_max = 1.2
+moisture = Vector2(0.45, 1)
+materials = 49
+placement = 1
+draw_distance = 45.0
+
 [sub_resource type="Resource" id="Resource_7bex6"]
 script = ExtResource("1_y1pxh")
 name = "Boreal"
 temperature = Vector2(0.06, 0.4)
 moisture = Vector2(0.25, 1)
 materials = 17
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_7h56b"), SubResource("Resource_ji6mu"), SubResource("Resource_vepnq"), SubResource("Resource_07620"), SubResource("Resource_acbbd"), SubResource("Resource_iksma")])
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_7h56b"), SubResource("Resource_ji6mu"), SubResource("Resource_vepnq"), SubResource("Resource_07620"), SubResource("Resource_acbbd"), SubResource("Resource_iksma"), SubResource("Resource_qq5rd"), SubResource("Resource_rgacn"), SubResource("Resource_8xek2")])
 
 [sub_resource type="Resource" id="Resource_wkmi1"]
 script = ExtResource("2_p1eig")
@@ -279,6 +407,61 @@ scale_max = 1.4
 materials = 49
 draw_distance = 110.0
 
+[sub_resource type="Resource" id="Resource_oc0on"]
+script = ExtResource("2_p1eig")
+name = "Jungle palm"
+kind = 6
+variants = 3
+density = 0.012
+scale_min = 2.0
+scale_max = 3.2
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 57
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_vwuwy"]
+script = ExtResource("2_p1eig")
+name = "Jungle fruit tree"
+kind = 8
+variants = 3
+scale_min = 1.8
+scale_max = 2.8
+clump_size = 150.0
+slope = Vector2(0, 30)
+materials = 49
+placement = 1
+collision = true
+far_detail_distance = 256.0
+far_density_falloff = 0.28
+
+[sub_resource type="Resource" id="Resource_e7y0u"]
+script = ExtResource("2_p1eig")
+name = "Jungle undergrowth"
+kind = 9
+variants = 1
+density = 0.045
+scale_min = 0.8
+scale_max = 1.6
+materials = 49
+placement = 1
+draw_distance = 70.0
+
+[sub_resource type="Resource" id="Resource_0m62o"]
+script = ExtResource("2_p1eig")
+name = "Jungle ferns"
+kind = 10
+variants = 1
+density = 0.06
+scale_min = 0.8
+scale_max = 1.6
+materials = 49
+placement = 1
+draw_distance = 45.0
+
 [sub_resource type="Resource" id="Resource_4qwq4"]
 script = ExtResource("1_y1pxh")
 name = "Tropical"
@@ -286,7 +469,7 @@ temperature = Vector2(0.72, 1)
 moisture = Vector2(0.45, 1)
 materials = 9
 density_scale = 2.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_wkmi1"), SubResource("Resource_2y2yb"), SubResource("Resource_lofsu"), SubResource("Resource_3twvk"), SubResource("Resource_m04a3")])
+layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_wkmi1"), SubResource("Resource_2y2yb"), SubResource("Resource_lofsu"), SubResource("Resource_3twvk"), SubResource("Resource_m04a3"), SubResource("Resource_oc0on"), SubResource("Resource_vwuwy"), SubResource("Resource_e7y0u"), SubResource("Resource_0m62o")])
 
 [sub_resource type="Resource" id="Resource_sigq6"]
 script = ExtResource("2_p1eig")
