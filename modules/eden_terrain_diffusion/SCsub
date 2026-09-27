@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+
+# Entry point for SCons to build this module.
+#
+# This module is currently a linkage proof for ONNX Runtime (see
+# onnx_linkage_test.cpp / ADR for the terrain diffusion ML generator). It
+# vendors the prebuilt ONNX Runtime win-x64-gpu C++ distribution from
+# thirdparty/onnxruntime/ rather than building ORT from source (ORT's own
+# build is CMake/Bazel-based and not practical to fold into Godot's SCons
+# tree; Godot itself has no precedent for compiling ORT from source).
+
+Import("env")
+Import("env_modules")
+
+env_eden_terrain_diffusion = env_modules.Clone()
+
+module_obj = []
+
+if env["platform"] == "windows":
+	onnxruntime_dir = "#thirdparty/onnxruntime"
+
+	env_eden_terrain_diffusion.Append(CPPPATH=[onnxruntime_dir + "/include"])
+
+	# ONNX Runtime's C++ API throws Ort::Exception on error; Godot normally
+	# builds with exceptions disabled, so enable them for just this module's
+	# translation units (matches the eden_erosion module's pattern of
+	# module-local compiler flag overrides for tier-specific requirements).
+	if env_eden_terrain_diffusion.msvc:
+		env_eden_terrain_diffusion.Append(CXXFLAGS=["/EHsc"])
+	else:
+		env_eden_terrain_diffusion.Append(CXXFLAGS=["-fexceptions"])
+
+	# NOTE: We deliberately do NOT use env.Append(LIBS=["onnxruntime"]) here.
+	# Godot's top-level SConstruct rewrites env["LIBSUFFIX"] to something like
+	# ".windows.editor.x86_64.lib" (its own versioned-suffix convention for
+	# Godot's own libs), and that suffix gets applied to *every* entry in
+	# LIBS -- including third-party prebuilt libs -- which breaks the lookup
+	# ("onnxruntime.windows.editor.x86_64.lib" does not exist). Passing the
+	# resolved absolute .lib path directly via LINKFLAGS bypasses SCons'
+	# LIBPREFIX/LIBSUFFIX synthesis entirely.
+	onnxruntime_lib_path = env.Dir(onnxruntime_dir + "/lib").abspath + "\\onnxruntime.lib"
+	env.Append(LINKFLAGS=[onnxruntime_lib_path])
+
+	env_eden_terrain_diffusion.add_source_files(module_obj, "*.cpp")
+
+env.modules_sources += module_obj

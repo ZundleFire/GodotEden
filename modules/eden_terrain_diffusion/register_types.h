@@ -1,0 +1,9 @@
+#ifndef EDEN_TERRAIN_DIFFUSION_REGISTER_TYPES_H
+#define EDEN_TERRAIN_DIFFUSION_REGISTER_TYPES_H
+
+#include "modules/register_module_types.h"
+
+void initialize_eden_terrain_diffusion_module(ModuleInitializationLevel p_level);
+void uninitialize_eden_terrain_diffusion_module(ModuleInitializationLevel p_level);
+
+#endif // EDEN_TERRAIN_DIFFUSION_REGISTER_TYPES_H
