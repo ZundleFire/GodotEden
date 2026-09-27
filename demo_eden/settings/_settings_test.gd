@@ -77,7 +77,8 @@ func _process(_d: float) -> bool:
 				var f := _foliage()
 				results.append([p.name, fps, gpu_sum / maxi(frames, 1)])
 				root.get_texture().get_image().save_png(out.path_join("quality_%s.png" % p.name.to_lower()))
-				_check(f.grass_density_scale == p.grass_density and f.blades_per_tuft == p.grass_blades and f.grass_fade_end == p.grass_distance,
+				# (approx: EdenFoliage stores 32-bit floats)
+				_check(is_equal_approx(f.grass_density_scale, p.grass_density) and f.blades_per_tuft == p.grass_blades and is_equal_approx(f.grass_fade_end, p.grass_distance),
 						"%s reached the foliage (grass x%.2f, %d blades, %.0f m)" % [p.name, f.grass_density_scale, f.blades_per_tuft, f.grass_fade_end])
 				_check(is_equal_approx(root.scaling_3d_scale, p.render_scale), "%s render scale %.2f" % [p.name, root.scaling_3d_scale])
 				if level < 3:

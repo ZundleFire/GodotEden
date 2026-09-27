@@ -245,7 +245,7 @@ func _update_target() -> void:
 	if not hit.is_empty() and hit.position.distance_to(head) <= reach:
 		if hit.collider is VoxelInstancerRigidBody and _foliage:
 			var kind = _foliage.item_kinds.get(hit.collider.get_library_item_id())
-			var kind_name: String = EdenFoliageLayer.Kind.keys()[kind] if kind != null else ""
+			var kind_name: String = EdenFoliageLayer.kind_name(kind) if kind != null else ""
 			if GATHER.has(kind_name):
 				gather_target = hit.collider
 				gather_kind = kind_name

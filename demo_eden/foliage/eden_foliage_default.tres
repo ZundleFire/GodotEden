@@ -1,11 +1,6 @@
-[gd_resource type="Resource" script_class="EdenFoliageConfig" format=3 uid="uid://p5u8mxk0bux2"]
+[gd_resource type="EdenFoliageConfig" format=3 uid="uid://p5u8mxk0bux2"]
 
-[ext_resource type="Script" uid="uid://ro4kr103yax8" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
-[ext_resource type="Script" uid="uid://ekresl7y7y64" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
-[ext_resource type="Script" uid="uid://dcq0ig3lfvu7x" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
-
-[sub_resource type="Resource" id="Resource_uyh1r"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_uyh1r"]
 name = "Grass"
 kind = 0
 variants = 1
@@ -16,8 +11,7 @@ slope = Vector2(0, 35)
 materials = 1
 vertical_alignment = 0.6
 
-[sub_resource type="Resource" id="Resource_xfqtm"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_xfqtm"]
 name = "Oak"
 kind = 2
 variants = 3
@@ -31,8 +25,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_vwwki"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_vwwki"]
 name = "Birch"
 kind = 4
 variants = 3
@@ -46,8 +39,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_c862y"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_c862y"]
 name = "Willow"
 kind = 5
 variants = 3
@@ -61,8 +53,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_6ra4n"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_6ra4n"]
 name = "Fruit tree"
 kind = 8
 variants = 3
@@ -76,8 +67,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_epmat"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_epmat"]
 name = "Shrub"
 kind = 9
 density = 0.02
@@ -85,8 +75,7 @@ scale_min = 0.7
 materials = 49
 draw_distance = 110.0
 
-[sub_resource type="Resource" id="Resource_a7617"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_a7617"]
 name = "Fern"
 kind = 10
 variants = 1
@@ -96,8 +85,7 @@ moisture = Vector2(0.6, 1)
 materials = 33
 draw_distance = 70.0
 
-[sub_resource type="Resource" id="Resource_n7l64"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_n7l64"]
 name = "Berry bush"
 kind = 14
 variants = 1
@@ -108,8 +96,7 @@ temperature = Vector2(0, 0.7)
 materials = 49
 draw_distance = 90.0
 
-[sub_resource type="Resource" id="Resource_uo2rn"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_uo2rn"]
 name = "Branches"
 kind = 19
 density = 0.012
@@ -118,8 +105,7 @@ materials = 49
 vertical_alignment = 0.2
 draw_distance = 60.0
 
-[sub_resource type="Resource" id="Resource_2xjvs"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_2xjvs"]
 name = "Logs"
 kind = 20
 density = 0.002
@@ -130,8 +116,7 @@ vertical_alignment = 0.2
 draw_distance = 150.0
 collision = true
 
-[sub_resource type="Resource" id="Resource_y1pxh"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_y1pxh"]
 name = "Forest oak"
 kind = 2
 variants = 3
@@ -147,8 +132,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_p1eig"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_p1eig"]
 name = "Forest birch"
 kind = 4
 variants = 3
@@ -164,8 +148,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_nll8y"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_nll8y"]
 name = "Forest willow"
 kind = 5
 variants = 3
@@ -181,8 +164,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_4il6k"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_4il6k"]
 name = "Undergrowth"
 kind = 9
 variants = 1
@@ -193,8 +175,7 @@ materials = 49
 placement = 1
 draw_distance = 70.0
 
-[sub_resource type="Resource" id="Resource_enhsa"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_enhsa"]
 name = "Forest ferns"
 kind = 10
 variants = 1
@@ -205,8 +186,7 @@ materials = 49
 placement = 1
 draw_distance = 45.0
 
-[sub_resource type="Resource" id="Resource_2y1tl"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_2y1tl"]
 name = "Forest berries"
 kind = 14
 variants = 1
@@ -217,16 +197,14 @@ materials = 49
 placement = 1
 draw_distance = 60.0
 
-[sub_resource type="Resource" id="Resource_2rkrs"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_2rkrs"]
 name = "Temperate"
 temperature = Vector2(0.35, 0.8)
 moisture = Vector2(0.35, 1)
 materials = 49
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_uyh1r"), SubResource("Resource_xfqtm"), SubResource("Resource_vwwki"), SubResource("Resource_c862y"), SubResource("Resource_6ra4n"), SubResource("Resource_epmat"), SubResource("Resource_a7617"), SubResource("Resource_n7l64"), SubResource("Resource_uo2rn"), SubResource("Resource_2xjvs"), SubResource("Resource_y1pxh"), SubResource("Resource_p1eig"), SubResource("Resource_nll8y"), SubResource("Resource_4il6k"), SubResource("Resource_enhsa"), SubResource("Resource_2y1tl")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_uyh1r"), SubResource("Resource_xfqtm"), SubResource("Resource_vwwki"), SubResource("Resource_c862y"), SubResource("Resource_6ra4n"), SubResource("Resource_epmat"), SubResource("Resource_a7617"), SubResource("Resource_n7l64"), SubResource("Resource_uo2rn"), SubResource("Resource_2xjvs"), SubResource("Resource_y1pxh"), SubResource("Resource_p1eig"), SubResource("Resource_nll8y"), SubResource("Resource_4il6k"), SubResource("Resource_enhsa"), SubResource("Resource_2y1tl")])
 
-[sub_resource type="Resource" id="Resource_7h56b"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_7h56b"]
 name = "Grass"
 kind = 0
 variants = 1
@@ -239,8 +217,7 @@ vertical_alignment = 0.6
 grass_base_color = Color(0.17, 0.3, 0.14, 1)
 grass_tip_color = Color(0.36, 0.48, 0.25, 1)
 
-[sub_resource type="Resource" id="Resource_ji6mu"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_ji6mu"]
 name = "Pine"
 kind = 3
 variants = 3
@@ -253,8 +230,7 @@ materials = 53
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_vepnq"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_vepnq"]
 name = "Birch"
 kind = 4
 variants = 3
@@ -268,8 +244,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_07620"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_07620"]
 name = "Shrub"
 kind = 9
 density = 0.012
@@ -278,8 +253,7 @@ scale_max = 1.1
 materials = 49
 draw_distance = 110.0
 
-[sub_resource type="Resource" id="Resource_acbbd"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_acbbd"]
 name = "Branches"
 kind = 19
 density = 0.012
@@ -288,8 +262,7 @@ materials = 49
 vertical_alignment = 0.2
 draw_distance = 60.0
 
-[sub_resource type="Resource" id="Resource_iksma"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_iksma"]
 name = "Logs"
 kind = 20
 density = 0.003
@@ -300,8 +273,7 @@ vertical_alignment = 0.2
 draw_distance = 150.0
 collision = true
 
-[sub_resource type="Resource" id="Resource_qq5rd"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_qq5rd"]
 name = "Forest pine"
 kind = 3
 variants = 3
@@ -316,8 +288,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_rgacn"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_rgacn"]
 name = "Undergrowth"
 kind = 9
 variants = 1
@@ -328,8 +299,7 @@ materials = 49
 placement = 1
 draw_distance = 70.0
 
-[sub_resource type="Resource" id="Resource_8xek2"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_8xek2"]
 name = "Forest ferns"
 kind = 10
 variants = 1
@@ -341,16 +311,14 @@ materials = 49
 placement = 1
 draw_distance = 45.0
 
-[sub_resource type="Resource" id="Resource_7bex6"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_7bex6"]
 name = "Boreal"
 temperature = Vector2(0.06, 0.4)
 moisture = Vector2(0.25, 1)
 materials = 17
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_7h56b"), SubResource("Resource_ji6mu"), SubResource("Resource_vepnq"), SubResource("Resource_07620"), SubResource("Resource_acbbd"), SubResource("Resource_iksma"), SubResource("Resource_qq5rd"), SubResource("Resource_rgacn"), SubResource("Resource_8xek2")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_7h56b"), SubResource("Resource_ji6mu"), SubResource("Resource_vepnq"), SubResource("Resource_07620"), SubResource("Resource_acbbd"), SubResource("Resource_iksma"), SubResource("Resource_qq5rd"), SubResource("Resource_rgacn"), SubResource("Resource_8xek2")])
 
-[sub_resource type="Resource" id="Resource_wkmi1"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_wkmi1"]
 name = "Grass"
 kind = 0
 variants = 1
@@ -360,8 +328,7 @@ slope = Vector2(0, 35)
 materials = 1
 vertical_alignment = 0.6
 
-[sub_resource type="Resource" id="Resource_2y2yb"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_2y2yb"]
 name = "Palm"
 kind = 6
 variants = 3
@@ -374,8 +341,7 @@ materials = 57
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_lofsu"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_lofsu"]
 name = "Fruit tree"
 kind = 8
 variants = 3
@@ -388,8 +354,7 @@ materials = 49
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_3twvk"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_3twvk"]
 name = "Fern"
 kind = 10
 variants = 1
@@ -398,8 +363,7 @@ scale_max = 1.5
 materials = 33
 draw_distance = 70.0
 
-[sub_resource type="Resource" id="Resource_m04a3"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_m04a3"]
 name = "Shrub"
 kind = 9
 density = 0.02
@@ -407,8 +371,7 @@ scale_max = 1.4
 materials = 49
 draw_distance = 110.0
 
-[sub_resource type="Resource" id="Resource_oc0on"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_oc0on"]
 name = "Jungle palm"
 kind = 6
 variants = 3
@@ -423,8 +386,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_vwuwy"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_vwuwy"]
 name = "Jungle fruit tree"
 kind = 8
 variants = 3
@@ -438,8 +400,7 @@ collision = true
 far_detail_distance = 256.0
 far_density_falloff = 0.28
 
-[sub_resource type="Resource" id="Resource_e7y0u"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_e7y0u"]
 name = "Jungle undergrowth"
 kind = 9
 variants = 1
@@ -449,8 +410,7 @@ materials = 49
 placement = 1
 draw_distance = 70.0
 
-[sub_resource type="Resource" id="Resource_0m62o"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_0m62o"]
 name = "Jungle ferns"
 kind = 10
 variants = 1
@@ -460,17 +420,15 @@ materials = 49
 placement = 1
 draw_distance = 45.0
 
-[sub_resource type="Resource" id="Resource_4qwq4"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_4qwq4"]
 name = "Tropical"
 temperature = Vector2(0.72, 1)
 moisture = Vector2(0.45, 1)
 materials = 9
 density_scale = 2.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_wkmi1"), SubResource("Resource_2y2yb"), SubResource("Resource_lofsu"), SubResource("Resource_3twvk"), SubResource("Resource_m04a3"), SubResource("Resource_oc0on"), SubResource("Resource_vwuwy"), SubResource("Resource_e7y0u"), SubResource("Resource_0m62o")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_wkmi1"), SubResource("Resource_2y2yb"), SubResource("Resource_lofsu"), SubResource("Resource_3twvk"), SubResource("Resource_m04a3"), SubResource("Resource_oc0on"), SubResource("Resource_vwuwy"), SubResource("Resource_e7y0u"), SubResource("Resource_0m62o")])
 
-[sub_resource type="Resource" id="Resource_sigq6"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_sigq6"]
 name = "Dry grass"
 kind = 1
 variants = 1
@@ -485,8 +443,7 @@ vertical_alignment = 0.6
 grass_base_color = Color(0.36, 0.33, 0.14, 1)
 grass_tip_color = Color(0.66, 0.58, 0.3, 1)
 
-[sub_resource type="Resource" id="Resource_0pwoe"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_0pwoe"]
 name = "Dead tree"
 kind = 7
 variants = 3
@@ -498,16 +455,14 @@ materials = 57
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_ah0r4"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_ah0r4"]
 name = "Dead bush"
 kind = 11
 scale_min = 0.7
 materials = 57
 draw_distance = 110.0
 
-[sub_resource type="Resource" id="Resource_doous"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_doous"]
 name = "Cactus"
 kind = 13
 variants = 1
@@ -518,17 +473,15 @@ temperature = Vector2(0.7, 1)
 materials = 25
 draw_distance = 150.0
 
-[sub_resource type="Resource" id="Resource_8avvj"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_8avvj"]
 name = "Dry"
 temperature = Vector2(0.45, 1)
 moisture = Vector2(0, 0.38)
 materials = 26
 density_scale = 2.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_sigq6"), SubResource("Resource_0pwoe"), SubResource("Resource_ah0r4"), SubResource("Resource_doous")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_sigq6"), SubResource("Resource_0pwoe"), SubResource("Resource_ah0r4"), SubResource("Resource_doous")])
 
-[sub_resource type="Resource" id="Resource_meq0j"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_meq0j"]
 name = "Dead tree"
 kind = 7
 variants = 3
@@ -540,8 +493,7 @@ materials = 53
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_lly70"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_lly70"]
 name = "Pine"
 kind = 3
 variants = 3
@@ -554,8 +506,7 @@ materials = 53
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_ehge7"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_ehge7"]
 name = "Stones"
 variants = 3
 density = 0.004
@@ -567,15 +518,13 @@ sink = -0.15
 draw_distance = 90.0
 lichen = 0.15
 
-[sub_resource type="Resource" id="Resource_chiet"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_chiet"]
 name = "Tundra"
 temperature = Vector2(0, 0.1)
 materials = 55
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_meq0j"), SubResource("Resource_lly70"), SubResource("Resource_ehge7")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_meq0j"), SubResource("Resource_lly70"), SubResource("Resource_ehge7")])
 
-[sub_resource type="Resource" id="Resource_6efxk"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_6efxk"]
 name = "Pebbles"
 kind = 15
 variants = 1
@@ -586,8 +535,7 @@ slope = Vector2(0, 45)
 materials = 59
 draw_distance = 50.0
 
-[sub_resource type="Resource" id="Resource_yil0x"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_yil0x"]
 name = "Stones"
 variants = 3
 density = 0.003
@@ -600,8 +548,7 @@ draw_distance = 90.0
 moss = 0.25
 lichen = 0.05
 
-[sub_resource type="Resource" id="Resource_tpjpg"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_tpjpg"]
 name = "Boulders"
 variants = 3
 density = 0.0004
@@ -616,16 +563,14 @@ moss = 0.4
 lichen = 0.05
 facet_detail = 2
 
-[sub_resource type="Resource" id="Resource_5ttj7"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_5ttj7"]
 name = "Grassland Rocks"
 materials = 57
 density_scale = 2.0
 size_scale = 2.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_6efxk"), SubResource("Resource_yil0x"), SubResource("Resource_tpjpg")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_6efxk"), SubResource("Resource_yil0x"), SubResource("Resource_tpjpg")])
 
-[sub_resource type="Resource" id="Resource_eiody"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_eiody"]
 name = "Boulder field"
 variants = 3
 density = 0.0015
@@ -636,16 +581,14 @@ lod = 1
 collision = true
 lichen = 0.1
 
-[sub_resource type="Resource" id="Resource_f3k4g"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_f3k4g"]
 name = "Mountain Rock"
 slope = Vector2(0, 35)
 materials = 6
 density_scale = 3.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_eiody")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_eiody")])
 
-[sub_resource type="Resource" id="Resource_1qyht"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_1qyht"]
 name = "Cliff slabs"
 kind = 17
 variants = 3
@@ -658,8 +601,7 @@ lod = 1
 collision = true
 roughness = 0.18
 
-[sub_resource type="Resource" id="Resource_hhmrf"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_hhmrf"]
 name = "Cliff boulders"
 density = 0.0005
 scale_min = 8.0
@@ -670,8 +612,7 @@ lod = 1
 collision = true
 roughness = 0.3
 
-[sub_resource type="Resource" id="Resource_hcdlu"]
-script = ExtResource("2_p1eig")
+[sub_resource type="EdenFoliageLayer" id="Resource_hcdlu"]
 name = "Spires"
 kind = 18
 density = 4e-05
@@ -683,13 +624,11 @@ sink = -0.2
 lod = 1
 collision = true
 
-[sub_resource type="Resource" id="Resource_ooxfq"]
-script = ExtResource("1_y1pxh")
+[sub_resource type="EdenFoliageBiome" id="Resource_ooxfq"]
 name = "Cliffs"
 slope = Vector2(35, 90)
 density_scale = 2.0
-layers = Array[ExtResource("2_p1eig")]([SubResource("Resource_1qyht"), SubResource("Resource_hhmrf"), SubResource("Resource_hcdlu")])
+layers = Array[EdenFoliageLayer]([SubResource("Resource_1qyht"), SubResource("Resource_hhmrf"), SubResource("Resource_hcdlu")])
 
 [resource]
-script = ExtResource("3_nll8y")
-biomes = Array[ExtResource("1_y1pxh")]([SubResource("Resource_2rkrs"), SubResource("Resource_7bex6"), SubResource("Resource_4qwq4"), SubResource("Resource_8avvj"), SubResource("Resource_chiet"), SubResource("Resource_5ttj7"), SubResource("Resource_f3k4g"), SubResource("Resource_ooxfq")])
+biomes = Array[EdenFoliageBiome]([SubResource("Resource_2rkrs"), SubResource("Resource_7bex6"), SubResource("Resource_4qwq4"), SubResource("Resource_8avvj"), SubResource("Resource_chiet"), SubResource("Resource_5ttj7"), SubResource("Resource_f3k4g"), SubResource("Resource_ooxfq")])

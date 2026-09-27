@@ -23,7 +23,7 @@ func _initialize() -> void:
 		print("BIOME %-12s T %s M %s slope %s mats %s dens x%.2f %s" % [b.name, b.temperature, b.moisture, b.slope,
 				_mats(b.materials), b.density_scale, "" if b.enabled else "(off)"])
 		for l in b.layers:
-			var kind: String = EdenFoliageLayer.Kind.keys()[l.kind]
+			var kind: String = EdenFoliageLayer.kind_name(l.kind)
 			var t := Vector2(maxf(b.temperature.x, l.temperature.x), minf(b.temperature.y, l.temperature.y))
 			var m := Vector2(maxf(b.moisture.x, l.moisture.x), minf(b.moisture.y, l.moisture.y))
 			print("   %-16s %-8s dens %.4f T %s M %s mats %s place %d dd %.0f" % [l.name, kind, l.density, t, m,
