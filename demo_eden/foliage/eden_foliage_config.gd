@@ -147,7 +147,9 @@ static func make_default() -> EdenFoliageConfig:
 			_layer("Shrub", K.SHRUB, 0.02, Vector2(0.8, 1.4), {"materials": veg, "draw_distance": 110.0}),
 		]),
 		_biome("Dry", Vector2(0.45, 1.0), Vector2(0.0, 0.38), [
-			_layer("Dry grass", K.DRY_GRASS, 5.0, Vector2(0.6, 1.2), {"materials": GRASS | DIRT, "grass_base_color": Color(0.36, 0.33, 0.14), "grass_tip_color": Color(0.66, 0.58, 0.30)}),
+			# Deserts and steppe: sparse clumps of dry grass, none at all in the driest land (the terrain is drawn as sand
+			# there; its material channel still says grass, so the moisture limit does the work)
+			_layer("Dry grass", K.DRY_GRASS, 0.3, Vector2(0.6, 1.2), {"materials": GRASS, "moisture": Vector2(0.26, 1.0), "clump_size": 14.0, "grass_base_color": Color(0.36, 0.33, 0.14), "grass_tip_color": Color(0.66, 0.58, 0.30)}),
 			_layer("Dead tree", K.DEAD_TREE, 0.0004, Vector2(1.6, 2.6), {"materials": veg | SAND, "clump_size": 0.0}),
 			_layer("Dead bush", K.DEAD_BUSH, 0.01, Vector2(0.7, 1.3), {"materials": veg | SAND, "draw_distance": 110.0}),
 			_layer("Cactus", K.CACTUS, 0.004, Vector2(0.7, 1.4), {"materials": SAND | DIRT | GRASS, "temperature": Vector2(0.7, 1.0), "variants": 1, "draw_distance": 150.0}),

@@ -27,11 +27,21 @@ vec2 eden_weather_uv(vec3 d) {
 	return e * 0.5 + 0.5;
 }
 
+// eden_weather_params.w: 0 while no snow or wet ground exists anywhere on the map -- skip the lookup
 vec4 eden_weather(vec3 world_pos) {
-	if (eden_weather_planet.w <= 0.0) {
+	if (eden_weather_planet.w <= 0.0 || eden_weather_params.w < 0.5) {
 		return vec4(0.0);
 	}
 	return textureLod(eden_weather_map, eden_weather_uv(world_pos - eden_weather_planet.xyz), 0.0);
+}
+
+// For things only drawn near the camera (grass, plants): eden_weather_params.z is 0 while there is no snow or
+// wet ground within ~2 km, and most frames need no lookup at all (it cost ~2 ms over a meadow's grass)
+vec4 eden_weather_near(vec3 world_pos) {
+	if (eden_weather_params.z < 0.5) {
+		return vec4(0.0);
+	}
+	return eden_weather(world_pos);
 }
 
 vec3 eden_weather_up(vec3 world_pos) {

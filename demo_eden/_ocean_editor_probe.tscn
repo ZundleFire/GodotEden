@@ -5,6 +5,9 @@
 [ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
 [ext_resource type="Script" uid="uid://bj22rajkkuab1" path="res://eden_foliage.gd" id="eden_foliage_gd"]
 [ext_resource type="Resource" uid="uid://p5u8mxk0bux2" path="res://foliage/eden_foliage_default.tres" id="foliage_config"]
+[ext_resource type="PackedScene" path="res://Character/eden_player.tscn" id="eden_player"]
+[ext_resource type="Script" path="res://settings/eden_graphics.gd" id="eden_graphics"]
+[ext_resource type="Script" path="res://settings/eden_calendar.gd" id="eden_calendar"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_j51q1"]
 
@@ -73,7 +76,7 @@ shader_parameter/u_polar_dark_grass = Vector3(0.22, 0.3, 0.22)
 shader_parameter/u_rock_dark = Vector3(0.4, 0.4, 0.38)
 shader_parameter/u_rock_mid = Vector3(0.49, 0.48, 0.44)
 shader_parameter/u_rock_light = Vector3(0.63, 0.61, 0.54)
-shader_parameter/u_snow_color = Vector3(0.84, 0.85, 0.82)
+shader_parameter/u_snow_color = Vector3(0.74, 0.77, 0.82)
 shader_parameter/u_sand_color = Vector3(0.67, 0.56, 0.34)
 shader_parameter/u_dirt_color = Vector3(0.34, 0.24, 0.13)
 shader_parameter/u_moss_color = Vector3(0.15, 0.31, 0.14)
@@ -1335,6 +1338,7 @@ tree_wind_fade_end = 30.0
 
 [node name="EdenPlanetAtmosphere" type="EdenPlanetAtmosphere" parent="VoxelLodTerrain" unique_id=1264475597]
 planet_radius = 39900.0
+sun_light_energy = 1.7
 mie_scale_height = 75.0
 rayleigh_strength = 2.0
 ozone_strength = 1.0
@@ -1370,9 +1374,7 @@ cloud_sunset_underlight = 0.25
 tonemapper = 4
 sun_shadows = false
 haze_density = 0.0006
-wind_speed = 8.0
-wind_heading = 220.0
-storm_speed = 15.0
+wind_heading = 265.0
 leaves_amount = 0.01
 dust_amount = 0.08
 audio_in_editor = true
@@ -1411,3 +1413,14 @@ parent_planet_pixel_scale = 400.0
 space_panorama = ExtResource("3_g7vpv")
 space_texture_dir = "res://Panoramics"
 use_placeholder_panorama = false
+
+[node name="EdenPlayer" parent="." instance=ExtResource("eden_player")]
+transform = Transform3D(0.951433, 0, 0.307857, -0.306961, -0.076236, 0.948664, 0.02347, -0.99709, -0.072533, -12281.195, -3050.116, 37955.125)
+planet_path = NodePath("../VoxelLodTerrain")
+
+[node name="EdenGraphics" type="Node" parent="."]
+script = ExtResource("eden_graphics")
+quality = 1
+
+[node name="EdenCalendar" type="Node" parent="."]
+script = ExtResource("eden_calendar")

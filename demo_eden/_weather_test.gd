@@ -123,7 +123,56 @@ func _process(_d: float) -> bool:
 	if phase == 3 and el > 3.0:
 		_check(st.lightning_strikes > 0, "lightning under the thunder cell (%d strikes)" % st.lightning_strikes)
 		_check(st.effects[EdenAmbience.FX_RAIN] > 0.3 and st.audio_levels[AudioStreamEdenAmbience.LAYER_RAIN] > 0.3, "raining, with rain audio")
-		print("WEATHER_TEST ", "PASS" if ok else "FAIL")
-		quit(0 if ok else 1)
-		return true
+		# Weather overrides around the camera, one after another (still under the warm thunderstorm)
+		amb.override_fade = 1.0
+		_next_override()
+		return false
+	if phase >= 4 and el > 3.0:
+		_check_override(st)
+		if not _next_override():
+			print("WEATHER_TEST ", "PASS" if ok else "FAIL")
+			quit(0 if ok else 1)
+			return true
 	return false
+
+
+var _overrides := [
+	[EdenAmbience.WEATHER_CLEAR, "warm"],
+	[EdenAmbience.WEATHER_SNOW, "warm"],
+	[EdenAmbience.WEATHER_RAIN, "cold"],
+	[EdenAmbience.WEATHER_DUST_STORM, "cold"],
+	[EdenAmbience.WEATHER_THUNDERSTORM, "cold"],
+	[EdenAmbience.WEATHER_AUTO, "cold"],
+]
+var _override_index := -1
+var _strikes_before := 0
+
+
+func _next_override() -> bool:
+	_override_index += 1
+	if _override_index >= _overrides.size():
+		return false
+	var o: Array = _overrides[_override_index]
+	amb.weather_override = o[0]
+	cam.position = (warm_pos if o[1] == "warm" else cold_pos) * 1.0001
+	_strikes_before = amb.get_debug_state().lightning_strikes
+	phase = 4 + _override_index
+	t0 = Time.get_ticks_msec()
+	return true
+
+
+func _check_override(st: Dictionary) -> void:
+	var fx: Array = st.effects
+	match _overrides[_override_index][0]:
+		EdenAmbience.WEATHER_CLEAR:
+			_check(st.precipitation < 0.05 and st.cloud < 0.1, "Clear clears the storm overhead (precip %.2f)" % st.precipitation)
+		EdenAmbience.WEATHER_SNOW:
+			_check(st.freezing > 0.9 and fx[EdenAmbience.FX_SNOW] > 0.3 and fx[EdenAmbience.FX_RAIN] < 0.05, "Snow snows even somewhere warm")
+		EdenAmbience.WEATHER_RAIN:
+			_check(st.freezing < 0.1 and fx[EdenAmbience.FX_RAIN] > 0.3, "Rain rains even somewhere freezing")
+		EdenAmbience.WEATHER_DUST_STORM:
+			_check(st.dust_storm > 0.5 and fx[EdenAmbience.FX_DUST] > 0.3, "Dust Storm blows dust (%.2f)" % st.dust_storm)
+		EdenAmbience.WEATHER_THUNDERSTORM:
+			_check(st.thunder and st.lightning_strikes > _strikes_before, "Thunderstorm strikes lightning (%d)" % (st.lightning_strikes - _strikes_before))
+		EdenAmbience.WEATHER_AUTO:
+			_check(st.override_strength == 0.0 and st.weather == "Auto", "Auto hands back to the natural weather")

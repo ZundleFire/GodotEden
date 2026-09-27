@@ -3,6 +3,10 @@ render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_sc
 
 #define EDEN_WEATHER_MATERIAL_UNIFORMS
 #include "res://shaders/eden_weather.gdshaderinc"
+#include "res://shaders/eden_season.gdshaderinc"
+// Seasons: set on this material by EdenAmbience from EdenCalendar (not globals: GPU-driven terrain can't use them)
+uniform vec4 eden_calendar = vec4(0.0);
+uniform vec4 eden_calendar_axis = vec4(0.0, 1.0, 0.0, 0.0);
 
 /*
     Eden Planet — Low-Poly Faceted Climate Terrain
@@ -189,6 +193,8 @@ uniform vec3 u_ocean_floor_color = vec3(0.18, 0.28, 0.33);
 varying flat vec4 v_indices;
 varying vec4 v_weights;
 varying vec4 v_surface;
+// 0 where the mesh had no surface data (far sectors): the climate is estimated there instead
+varying float v_has_surface;
 varying vec3 v_pos_world;
 // Provoking-vertex altitude: one value per triangle, so highland rock cuts along facet edges.
 varying flat float v_face_altitude01;
@@ -646,6 +652,7 @@ void vertex() {
 		dot(CUSTOM2, CUSTOM2) == 0.0
 		? vec4(0.5)
 		: CUSTOM2;
+	v_has_surface = dot(CUSTOM2, CUSTOM2) == 0.0 ? 0.0 : 1.0;
 }
 
 
@@ -943,6 +950,17 @@ void fragment() {
 			u_cold_desaturation
 		);
 
+	// The seasons here (this hemisphere's, felt more toward the poles): the ground's plants flush in spring,
+	// brown in autumn and go dormant in winter, like the grass tufts
+	vegetation_color =
+		eden_seasonal_green(
+			vegetation_color,
+			eden_grass_state_tropical(
+				eden_grass_state(eden_season(radial, eden_calendar, eden_calendar_axis.xyz)),
+				eden_tropical_season(radial, eden_calendar, eden_calendar_axis.xyz)
+			)
+		);
+
 
 	// -------------------------------------------------------------------------
 	// Grass / vegetation
@@ -1146,6 +1164,34 @@ void fragment() {
 			1.0
 		);
 
+	// Seasonal snow cover and frost, from today's temperature here (the climate plus this hemisphere's season,
+	// as the weather reckons it): lying snow below about -3 °C, settling on flatter ground first; a hoar-frost
+	// paling just above; both come and go with the seasons, opposite in the two hemispheres
+	// (far sectors have no surface data: their climate comes from the latitude/height estimate)
+	float annual_temperature =
+		mix(
+			eden_estimated_temperature(radial, eden_calendar_axis.xyz, altitude),
+			generator_temperature,
+			v_has_surface
+		);
+	float season_temperature =
+		annual_temperature +
+		eden_season_offset(radial, eden_calendar, eden_calendar_axis.xyz);
+	float land = 1.0 - ocean_floor_weight;
+	// Lying winter snow comes through the weather map (below) with the storms' snow, so the ground agrees with the
+	// grass and trees; far sectors, which have no weather lookup of their own, reckon it here
+	float winter_snow =
+		(1.0 - v_has_surface) *
+		eden_winter_snow(season_temperature) *
+		smoothstep(0.3, 0.75, slope_up) *
+		land;
+	float frost =
+		(1.0 - smoothstep(0.26, 0.33, season_temperature)) *
+		(1.0 - winter_snow) *
+		land;
+	albedo = mix(albedo, mix(albedo, vec3(0.78, 0.8, 0.82), 0.55), frost * 0.6);
+	snow_amount = max(snow_amount, winter_snow);
+
 	albedo =
 		mix(
 			albedo,
@@ -1262,8 +1308,9 @@ void fragment() {
 
 	METALLIC = 0.0;
 
-	// Keep the terrain matte. The low-poly facet lighting should be the star.
-	SPECULAR = 0.18;
+	// Keep the terrain matte. The low-poly facet lighting should be the star (a sky sheen at grazing angles washes
+	// distant ground toward white).
+	SPECULAR = 0.1;
 
 
 	// -------------------------------------------------------------------------

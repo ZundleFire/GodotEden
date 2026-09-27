@@ -48,6 +48,18 @@ EdenWeatherSim::~EdenWeatherSim() {
 	if (climate_task != WorkerThreadPool::INVALID_TASK_ID) {
 		WorkerThreadPool::get_singleton()->wait_for_task_completion(climate_task);
 	}
+	if (integrate_task != WorkerThreadPool::INVALID_TASK_ID) {
+		WorkerThreadPool::get_singleton()->wait_for_task_completion(integrate_task);
+	}
+}
+
+// 1 inside the override zone, fading to 0 over its outer 30%
+float EdenWeatherSim::_override_weight(const Override &p_o, const Vector3 &p_dir) const {
+	if (p_o.mode == Override::NONE || p_o.strength <= 0.0f) {
+		return 0.0f;
+	}
+	const float chord = Math::sqrt(MAX(2.0f - 2.0f * p_dir.dot(p_o.dir), 0.0f));
+	return (1.0f - _smoothstep(p_o.radius * 0.7f, p_o.radius, chord)) * p_o.strength;
 }
 
 static void _ensure_grids(LocalVector<Vector3> &r_dirs, LocalVector<float> *p_grids[], int p_count) {
@@ -82,8 +94,8 @@ void EdenWeatherSim::_bake_climate(void *p_self) {
 }
 
 void EdenWeatherSim::start_climate(Object *p_generator) {
-	LocalVector<float> *grids[] = { &temperature, &moisture, &snow, &wet, &precip, &cloud };
-	_ensure_grids(dirs, grids, 6);
+	LocalVector<float> *grids[] = { &temperature, &moisture, &snow, &wet, &precip, &cloud, &ground_snow };
+	_ensure_grids(dirs, grids, 7);
 	if (climate_task != WorkerThreadPool::INVALID_TASK_ID || p_generator == nullptr || !p_generator->has_method("sample_surface")) {
 		return;
 	}
@@ -108,8 +120,8 @@ void EdenWeatherSim::_spawn(Cell &r_cell, bool p_random_age) {
 		const float phi = _rand() * Math::TAU;
 		const float r = Math::sqrt(MAX(0.0f, 1.0f - z * z));
 		dir = Vector3(r * Math::cos(phi), z, r * Math::sin(phi));
-		m = ready ? _texel(moisture, dir) : 0.5f;
-		t = ready ? _texel(temperature, dir) : 0.5f;
+		m = CLAMP((ready ? _texel(moisture, dir) : 0.5f) + wet_season_offset(dir), 0.0f, 1.0f);
+		t = (ready ? _texel(temperature, dir) : 0.5f) + season_offset(dir);
 		const float dry = (1.0f - m) * (1.0f - m) * _smoothstep(0.4f, 0.7f, t);
 		found = _rand() < (dust ? dry : (1.0f - params.humidity_bias) + params.humidity_bias * m * m);
 	}
@@ -210,9 +222,20 @@ void EdenWeatherSim::step(float p_dt) {
 EdenWeatherSim::Sample EdenWeatherSim::sample(const Vector3 &p_dir) const {
 	float keep_p = 1.0f, keep_c = 1.0f, keep_d = 1.0f;
 	Sample s;
-	for (const Cell &c : cells) {
+	const Override &o = override_zone;
+	const float ow = _override_weight(o, p_dir);
+	const int extra = o.mode == Override::STORM && ow > 0.0f ? 1 : 0;
+	for (uint32_t k = 0; k < cells.size() + extra; k++) {
+		const Cell &c = k < cells.size() ? cells[k] : o.cell;
 		float p, cl;
 		_cell_contrib(c, p_dir, p, cl);
+		if (k < cells.size() && o.mode == Override::CLEAR) {
+			p *= 1.0f - ow;
+			cl *= 1.0f - ow;
+		} else if (k >= cells.size()) {
+			p *= o.strength;
+			cl *= o.strength;
+		}
 		if (c.dust) {
 			keep_d *= 1.0f - p;
 			continue;
@@ -258,8 +281,47 @@ void EdenWeatherSim::clear_cover() {
 }
 
 void EdenWeatherSim::integrate(float p_dt, const Vector3 &p_sun_dir) {
-	LocalVector<float> *grids[] = { &temperature, &moisture, &snow, &wet, &precip, &cloud };
-	_ensure_grids(dirs, grids, 6);
+	if (integrate_task != WorkerThreadPool::INVALID_TASK_ID) {
+		WorkerThreadPool::get_singleton()->wait_for_task_completion(integrate_task);
+		integrate_task = WorkerThreadPool::INVALID_TASK_ID;
+	}
+	_integrate(cells, override_zone, p_dt, p_sun_dir, image);
+}
+
+void EdenWeatherSim::integrate_async(float p_dt, const Vector3 &p_sun_dir) {
+	if (integrate_task != WorkerThreadPool::INVALID_TASK_ID) {
+		return; // the previous one is still running: its dt is folded into the next
+	}
+	LocalVector<float> *grids[] = { &temperature, &moisture, &snow, &wet, &precip, &cloud, &ground_snow };
+	_ensure_grids(dirs, grids, 7);
+	job_cells = cells;
+	job_override = override_zone;
+	job_dt = p_dt;
+	job_sun = p_sun_dir;
+	integrate_task = WorkerThreadPool::get_singleton()->add_native_task(&EdenWeatherSim::_integrate_job, this, false, "EdenWeather integrate");
+}
+
+void EdenWeatherSim::_integrate_job(void *p_self) {
+	EdenWeatherSim *self = (EdenWeatherSim *)p_self;
+	self->_integrate(self->job_cells, self->job_override, self->job_dt, self->job_sun, self->job_image);
+}
+
+bool EdenWeatherSim::poll_integrate() {
+	if (integrate_task == WorkerThreadPool::INVALID_TASK_ID || !WorkerThreadPool::get_singleton()->is_task_completed(integrate_task)) {
+		return false;
+	}
+	WorkerThreadPool::get_singleton()->wait_for_task_completion(integrate_task);
+	integrate_task = WorkerThreadPool::INVALID_TASK_ID;
+	image = job_image;
+	return image.is_valid();
+}
+
+// Runs on the main thread (integrate) or a worker (integrate_async). The snow/wet grids are shared with
+// snow_at()/wetness_at() on the main thread: those may read a texel mid-update, which only means a value
+// from this pass or the last -- aligned float stores don't tear.
+void EdenWeatherSim::_integrate(const LocalVector<Cell> &p_cells, const Override &p_o, float p_dt, const Vector3 &p_sun_dir, Ref<Image> &r_image) {
+	LocalVector<float> *grids[] = { &temperature, &moisture, &snow, &wet, &precip, &cloud, &ground_snow };
+	_ensure_grids(dirs, grids, 7);
 	const int n = W * H;
 	for (int i = 0; i < n; i++) {
 		precip[i] = 1.0f; // running products of (1 - contribution)
@@ -267,7 +329,12 @@ void EdenWeatherSim::integrate(float p_dt, const Vector3 &p_sun_dir) {
 	}
 	// Each cell only touches the texels in the map-space bounding box of its cap. Where the cap crosses
 	// a fold of the map (the equator, or the x/z = 0 planes below it) that box would be wrong: scan it all.
-	for (const Cell &c : cells) {
+	// The override storm rides along as one more cell (at the override's strength)
+	Cell ov = p_o.cell;
+	ov.intensity *= p_o.strength;
+	const int extra = p_o.mode == Override::STORM && p_o.strength > 0.0f ? 1 : 0;
+	for (uint32_t k = 0; k < p_cells.size() + extra; k++) {
+		const Cell &c = k < p_cells.size() ? p_cells[k] : ov;
 		if (_envelope(c) <= 0.0f || c.dust) { // dust storms leave no rain, snow or cloud on the map
 			continue;
 		}
@@ -302,18 +369,29 @@ void EdenWeatherSim::integrate(float p_dt, const Vector3 &p_sun_dir) {
 
 	const bool ready = climate_ready.load();
 	const float minutes = p_dt / 60.0f;
-	if (image.is_null()) {
-		image = Image::create_empty(W, H, false, Image::FORMAT_RGBA8);
+	if (r_image.is_null()) {
+		r_image = Image::create_empty(W, H, false, Image::FORMAT_RGBA8);
 	}
+	float activity = 0.0f;
 	Vector<uint8_t> data;
 	data.resize(n * 4);
 	uint8_t *w = data.ptrw();
 	for (int i = 0; i < n; i++) {
-		const float p = 1.0f - precip[i];
-		const float cl = 1.0f - cloud[i];
+		float p = 1.0f - precip[i];
+		float cl = 1.0f - cloud[i];
 		// Colder at night, warmer under the sun
-		const float t = (ready ? temperature[i] : 0.5f) - 0.04f + 0.08f * MAX(dirs[i].dot(p_sun_dir), 0.0f);
+		float t = (ready ? temperature[i] : 0.5f) + season_offset(dirs[i]) - 0.04f + 0.08f * MAX(dirs[i].dot(p_sun_dir), 0.0f);
 		const float freeze = params.freeze_temperature;
+		const float ow = _override_weight(p_o, dirs[i]);
+		if (ow > 0.0f) {
+			if (p_o.mode == Override::CLEAR) {
+				p *= 1.0f - ow;
+				cl *= 1.0f - ow;
+			}
+			if (p_o.temperature != 0) {
+				t = Math::lerp(t, freeze + 0.1f * p_o.temperature, ow);
+			}
+		}
 		if (t < freeze) {
 			snow[i] += p * params.snow_rate * minutes;
 		} else {
@@ -324,10 +402,18 @@ void EdenWeatherSim::integrate(float p_dt, const Vector3 &p_sun_dir) {
 		wet[i] -= params.dry_rate * minutes * (1.0f - p) * (0.4f + MAX(dirs[i].dot(p_sun_dir), 0.0f));
 		snow[i] = CLAMP(snow[i], 0.0f, 1.0f);
 		wet[i] = CLAMP(wet[i], 0.0f, 1.0f);
+		// The season's lying snow where today's (daily mean) temperature is well below freezing: from about -3 °C,
+		// full by -6 °C. Terrain, grass and trees all read it from here, so they agree where the ground is white.
+		const float t_day = (ready ? temperature[i] : 0.5f) + season_offset(dirs[i]);
+		const float lying = 1.0f - _smoothstep(freeze - 0.1f, freeze - 0.04f, t_day);
+		const float ground = MAX(snow[i], ready ? lying : 0.0f);
+		ground_snow[i] = ground;
+		activity = MAX(activity, MAX(ground, wet[i]));
 		w[i * 4 + 0] = (uint8_t)(p * 255.0f + 0.5f);
-		w[i * 4 + 1] = (uint8_t)(snow[i] * 255.0f + 0.5f);
+		w[i * 4 + 1] = (uint8_t)(ground * 255.0f + 0.5f);
 		w[i * 4 + 2] = (uint8_t)(wet[i] * 255.0f + 0.5f);
 		w[i * 4 + 3] = (uint8_t)(CLAMP(cl, 0.0f, 1.0f) * 255.0f + 0.5f);
 	}
-	image->set_data(W, H, false, Image::FORMAT_RGBA8, data);
+	r_image->set_data(W, H, false, Image::FORMAT_RGBA8, data);
+	map_activity = activity;
 }

@@ -1,8 +1,8 @@
 [gd_resource type="Resource" script_class="EdenFoliageConfig" format=3 uid="uid://p5u8mxk0bux2"]
 
-[ext_resource type="Script" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
-[ext_resource type="Script" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
-[ext_resource type="Script" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
+[ext_resource type="Script" uid="uid://ro4kr103yax8" path="res://foliage/eden_foliage_biome.gd" id="1_y1pxh"]
+[ext_resource type="Script" uid="uid://ekresl7y7y64" path="res://foliage/eden_foliage_layer.gd" id="2_p1eig"]
+[ext_resource type="Script" uid="uid://dcq0ig3lfvu7x" path="res://foliage/eden_foliage_config.gd" id="3_nll8y"]
 
 [sub_resource type="Resource" id="Resource_uyh1r"]
 script = ExtResource("2_p1eig")
@@ -444,7 +444,6 @@ name = "Jungle undergrowth"
 kind = 9
 variants = 1
 density = 0.045
-scale_min = 0.8
 scale_max = 1.6
 materials = 49
 placement = 1
@@ -456,7 +455,6 @@ name = "Jungle ferns"
 kind = 10
 variants = 1
 density = 0.06
-scale_min = 0.8
 scale_max = 1.6
 materials = 49
 placement = 1
@@ -476,11 +474,13 @@ script = ExtResource("2_p1eig")
 name = "Dry grass"
 kind = 1
 variants = 1
-density = 5.0
+density = 0.3
 scale_min = 0.6
 scale_max = 1.2
+clump_size = 14.0
+moisture = Vector2(0.26, 1)
 slope = Vector2(0, 35)
-materials = 17
+materials = 1
 vertical_alignment = 0.6
 grass_base_color = Color(0.36, 0.33, 0.14, 1)
 grass_tip_color = Color(0.66, 0.58, 0.3, 1)

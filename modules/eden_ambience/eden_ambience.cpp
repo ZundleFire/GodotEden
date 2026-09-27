@@ -2,6 +2,7 @@
 #include "eden_ambience_shaders.h"
 
 #include "core/config/engine.h"
+#include "core/os/os.h"
 #include "core/config/project_settings.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/3d/gpu_particles_3d.h"
@@ -57,16 +58,87 @@ static Node *_find_class(Node *p_node, const StringName &p_class, int p_depth) {
 	return nullptr;
 }
 
+static bool _nearly(const Variant &p_a, const Variant &p_b) {
+	if (p_a.get_type() != p_b.get_type()) {
+		return false;
+	}
+	switch (p_a.get_type()) {
+		case Variant::FLOAT: {
+			const double a = p_a, b = p_b;
+			return Math::abs(a - b) <= 0.002 * Math::abs(a) + 1e-7;
+		}
+		case Variant::VECTOR3: {
+			const Vector3 a = p_a, b = p_b;
+			return a.distance_to(b) <= 1e-4f * a.length() + 1e-5f;
+		}
+		case Variant::COLOR: {
+			const Color a = p_a, b = p_b;
+			return Math::abs(a.r - b.r) < 1e-3f && Math::abs(a.g - b.g) < 1e-3f && Math::abs(a.b - b.b) < 1e-3f && Math::abs(a.a - b.a) < 1e-3f;
+		}
+		default:
+			return p_a == p_b;
+	}
+}
+
+// Shader parameters are only pushed when they change: each set is a RenderingServer command
+static void _push(const Ref<ShaderMaterial> &p_mat, const StringName &p_name, const Variant &p_value) {
+	if (p_mat.is_valid() && !_nearly(p_mat->get_shader_parameter(p_name), p_value)) {
+		p_mat->set_shader_parameter(p_name, p_value);
+	}
+}
+
+static Node *_cached(ObjectID &r_id) {
+	Node *n = Object::cast_to<Node>(ObjectDB::get_instance(r_id));
+	return n != nullptr && n->is_inside_tree() ? n : nullptr;
+}
+
+Node *EdenAmbience::_get_clouds() const {
+	Node *n = _cached(clouds_cache);
+	if (n == nullptr) {
+		n = _find_class(_get_planet(), "EdenCloudShell", 0);
+		clouds_cache = n ? n->get_instance_id() : ObjectID();
+	}
+	return n;
+}
+
+Node *EdenAmbience::_get_foliage() const {
+	Node *n = _cached(foliage_cache);
+	if (n == nullptr) {
+		Node *planet = _get_planet();
+		for (int i = 0; planet && i < planet->get_child_count(); i++) {
+			if (planet->get_child(i)->has_method("get_forest_density")) {
+				n = planet->get_child(i);
+				break;
+			}
+		}
+		foliage_cache = n ? n->get_instance_id() : ObjectID();
+	}
+	return n;
+}
+
+void EdenAmbience::_atmo_set(Node *p_atmo, const StringName &p_name, const Variant &p_value) {
+	const Variant *prev = atmo_pushed.getptr(p_name);
+	if (prev != nullptr && _nearly(*prev, p_value)) {
+		return;
+	}
+	atmo_pushed[p_name] = p_value;
+	p_atmo->set(p_name, p_value);
+}
+
 // Looked up by class name so this module doesn't depend on eden_atmosphere
 Node *EdenAmbience::_get_atmosphere() const {
 	if (!atmosphere_path.is_empty()) {
 		return get_node_or_null(atmosphere_path);
+	}
+	if (Node *cached = _cached(atmo_cache)) {
+		return cached;
 	}
 	Node *planet = _get_planet();
 	Node *found = _find_class(planet, "EdenPlanetAtmosphere", 0);
 	if (found == nullptr && planet != nullptr) {
 		found = _find_class(planet->get_parent(), "EdenPlanetAtmosphere", 1);
 	}
+	atmo_cache = found ? found->get_instance_id() : ObjectID();
 	return found;
 }
 
@@ -208,48 +280,47 @@ void EdenAmbience::_build() {
 	}
 }
 
-static Node *_find_method(Node *p_node, const StringName &p_method) {
-	if (p_node == nullptr) {
-		return nullptr;
-	}
-	for (int i = 0; i < p_node->get_child_count(); i++) {
-		if (p_node->get_child(i)->has_method(p_method)) {
-			return p_node->get_child(i);
-		}
-	}
-	return nullptr;
-}
-
 // Samples the terrain on rings around the camera: surf goes where the ground crosses sea level (the nearest
 // shoreline along each bearing), rustling where EdenFoliage reports dense forest. Each kind keeps its nearest
-// sources, spread over different bearings.
+// sources, spread over different bearings. Spread over frames (SWEEP_BEARINGS_PER_FRAME bearings each) so it
+// never costs a frame spike: done in one go it took ~12 ms in a forest, once a second.
 void EdenAmbience::_find_sound_sources(const Vector3 &p_cam) {
-	Node3D *planet = _get_planet();
-	Object *gen = planet ? (Object *)planet->get("generator") : nullptr;
-	if (gen == nullptr || !gen->has_method("sample_surface") || !state.valid) {
+	SourceSweep &sw = sweep;
+	if (!sw.active) {
+		Node3D *planet = _get_planet();
+		Object *gen = planet ? (Object *)planet->get("generator") : nullptr;
+		if (gen == nullptr || !gen->has_method("sample_surface") || !state.valid) {
+			return;
+		}
+		sw.active = true;
+		sw.bearing = 0;
+		sw.R = state.planet_radius;
+		sw.center = state.center;
+		sw.up = (p_cam - state.center).normalized();
+		sw.t = sw.up.cross(Math::abs(sw.up.y) < 0.99f ? Vector3(0, 1, 0) : Vector3(1, 0, 0)).normalized();
+		sw.b = sw.up.cross(sw.t);
+		sw.cam_water = state.ground_height < 0.0f;
+		sw.shore.clear();
+		sw.forest.clear();
+		Node *foliage = _get_foliage();
+		sw.forest_here = -1.0f;
+		if (foliage != nullptr) {
+			sw.forest_here = foliage->call("get_forest_density", sw.center + sw.up * (sw.R + MAX(state.ground_height, 0.0f)));
+		}
 		return;
 	}
-	Node *foliage = _find_method(planet, "get_forest_density");
-	const float R = state.planet_radius;
-	const Vector3 up = (p_cam - state.center).normalized();
-	const Vector3 t = up.cross(Math::abs(up.y) < 0.99f ? Vector3(0, 1, 0) : Vector3(1, 0, 0)).normalized();
-	const Vector3 b = up.cross(t);
-	const bool cam_water = state.ground_height < 0.0f;
-	static const float radii[] = { 10.0f, 25.0f, 50.0f, 90.0f, 150.0f, 240.0f, 350.0f, 550.0f, 800.0f };
-	const int AZ = 16;
-	struct Cand {
-		Vector3 pos;
-		float dist, az, strength;
-	};
-	LocalVector<Cand> shore, forest;
-	forest_here = -1.0f;
-	if (foliage != nullptr) {
-		forest_here = foliage->call("get_forest_density", state.center + up * (R + MAX(state.ground_height, 0.0f)));
+	Node3D *planet = _get_planet();
+	Object *gen = planet ? (Object *)planet->get("generator") : nullptr;
+	if (gen == nullptr) {
+		sw.active = false;
+		return;
 	}
-	for (int a = 0; a < AZ; a++) {
-		const float az = Math::TAU * a / AZ;
-		const Vector3 tangent = t * Math::cos(az) + b * Math::sin(az);
-		bool prev_water = cam_water;
+	Node *foliage = _get_foliage();
+	static const float radii[] = { 10.0f, 25.0f, 50.0f, 90.0f, 150.0f, 240.0f, 350.0f, 550.0f, 800.0f };
+	for (int step = 0; step < SWEEP_BEARINGS_PER_FRAME && sw.bearing < SWEEP_BEARINGS; step++, sw.bearing++) {
+		const float az = Math::TAU * sw.bearing / SWEEP_BEARINGS;
+		const Vector3 tangent = sw.t * Math::cos(az) + sw.b * Math::sin(az);
+		bool prev_water = sw.cam_water;
 		float prev_r = 0.0f;
 		bool shore_found = false;
 		for (float r : radii) {
@@ -258,35 +329,40 @@ void EdenAmbience::_find_sound_sources(const Vector3 &p_cam) {
 			if (!want_shore && !want_forest) {
 				break;
 			}
-			const Vector3 dir = (up + tangent * (r / R)).normalized();
+			const Vector3 dir = (sw.up + tangent * (r / sw.R)).normalized();
 			const Dictionary s = gen->call("sample_surface", dir);
 			const float h = s.get("height", 0.0f);
 			const bool water = h < 0.0f;
 			if (want_shore && water != prev_water) {
 				const float mid = (prev_r + r) * 0.5f;
 				if (mid <= surf_range) {
-					const Vector3 sdir = (up + tangent * (mid / R)).normalized();
-					shore.push_back({ state.center + sdir * (R + 0.5f), mid, az, 1.0f });
+					const Vector3 sdir = (sw.up + tangent * (mid / sw.R)).normalized();
+					sw.shore.push_back({ sw.center + sdir * (sw.R + 0.5f), mid, az, 1.0f });
 				}
 				shore_found = true;
 			}
 			prev_water = water;
 			prev_r = r;
 			if (want_forest && !water) {
-				const float f = foliage->call("get_forest_density", state.center + dir * (R + h));
+				const float f = foliage->call("get_forest_density", sw.center + dir * (sw.R + h));
 				if (f > 0.15f) {
-					forest.push_back({ state.center + dir * (R + h + 6.0f), r, az, f }); // in the canopy
+					sw.forest.push_back({ sw.center + dir * (sw.R + h + 6.0f), r, az, f }); // in the canopy
 					if (r <= 25.0f) {
-						forest_here = MAX(forest_here, f);
+						sw.forest_here = MAX(sw.forest_here, f);
 					}
 				}
 			}
 		}
 	}
+	if (sw.bearing < SWEEP_BEARINGS) {
+		return;
+	}
+	sw.active = false;
+	forest_here = sw.forest_here;
 	// Nearest first, spread over bearings, then fill the emitters (unused ones fade out where they are)
-	auto pick = [](LocalVector<Cand> &p_cands, Emitter *p_emitters, int p_count, float p_min_sep) {
+	auto pick = [](LocalVector<SoundCandidate> &p_cands, Emitter *p_emitters, int p_count, float p_min_sep) {
 		// Selection sort by distance with a bearing-separation check (candidate lists are small)
-		LocalVector<Cand> chosen;
+		LocalVector<SoundCandidate> chosen;
 		LocalVector<bool> taken;
 		taken.resize(p_cands.size());
 		for (uint32_t i = 0; i < taken.size(); i++) {
@@ -299,7 +375,7 @@ void EdenAmbience::_find_sound_sources(const Vector3 &p_cam) {
 					continue;
 				}
 				bool clash = false;
-				for (const Cand &c : chosen) {
+				for (const SoundCandidate &c : chosen) {
 					clash = clash || Math::abs(Math::angle_difference(p_cands[i].az, c.az)) < p_min_sep;
 				}
 				if (!clash) {
@@ -335,8 +411,8 @@ void EdenAmbience::_find_sound_sources(const Vector3 &p_cam) {
 			e.target_level = chosen[best].strength;
 		}
 	};
-	pick(shore, surf_emitters, SURF_EMITTERS, Math::deg_to_rad(60.0f));
-	pick(forest, leaf_emitters, LEAF_EMITTERS, Math::deg_to_rad(50.0f));
+	pick(sw.shore, surf_emitters, SURF_EMITTERS, Math::deg_to_rad(60.0f));
+	pick(sw.forest, leaf_emitters, LEAF_EMITTERS, Math::deg_to_rad(50.0f));
 }
 
 void EdenAmbience::_update_emitters(double p_delta, bool p_play, float p_wind, const Vector3 &p_cam, const Basis &p_cam_basis) {
@@ -358,12 +434,14 @@ void EdenAmbience::_update_emitters(double p_delta, bool p_play, float p_wind, c
 		const float d = rel.length();
 		const float unit = surf ? surf_unit_size : leaves_unit_size;
 		const float max_d = surf ? surf_range * 3.0f : forest_sound_range * 3.0f;
-		const Vector3 local = p_cam_basis.xform_inv(rel); // +x right, -z ahead
-		const float behind = d > 1e-3f ? MAX(local.z / d, 0.0f) : 0.0f;
+		const Vector3 in_view = p_cam_basis.xform_inv(rel); // +x right, -z ahead
+		const float behind = d > 1e-3f ? MAX(in_view.z / d, 0.0f) : 0.0f;
 		const float att = unit / MAX(unit, d) * (1.0f - _smoothstep(max_d * 0.7f, max_d, d)) * (1.0f - 0.25f * behind);
 		e.stream->out_gain.store(att);
-		e.stream->out_pan.store(d > 0.5f ? CLAMP(local.x / d, -1.0f, 1.0f) * 0.85f : 0.0f);
-		e.player->set_volume_db(volume_db);
+		e.stream->out_pan.store(d > 0.5f ? CLAMP(in_view.x / d, -1.0f, 1.0f) * 0.85f : 0.0f);
+		if (e.player->get_volume_db() != volume_db) {
+			e.player->set_volume_db(volume_db);
+		}
 		const float gain = surf ? surf_volume : leaves_volume * CLAMP(p_wind / 4.0f, 0.2f, 1.0f);
 		e.stream->set_level(e.layer, e.level * gain);
 		e.stream->gustiness.store(gustiness);
@@ -429,8 +507,8 @@ void EdenAmbience::_survey(const Vector3 &p_cam) {
 	if (gen != nullptr && gen->has_method("sample_surface")) {
 		const Dictionary s = gen->call("sample_surface", up);
 		state.ground_height = s.get("height", 0.0f);
-		state.temperature = s.get("temperature", 0.5f);
-		state.moisture = s.get("moisture", 0.5f);
+		temperature_mean = s.get("temperature", 0.5f);
+		moisture_mean = s.get("moisture", 0.5f);
 		// Sea nearby: sample two rings around the camera
 		const Vector3 t = up.cross(Math::abs(up.y) < 0.99f ? Vector3(0, 1, 0) : Vector3(1, 0, 0)).normalized();
 		const Vector3 b = up.cross(t);
@@ -515,6 +593,11 @@ void EdenAmbience::_apply_look() {
 			env->set_glow_blend_mode(Environment::GLOW_BLEND_MODE_ADDITIVE);
 		}
 	}
+	// How much of the sky's light fills the shadows: at full strength it lifts every face equally and flattens the
+	// sun-lit vs shaded facets of the low-poly terrain (the atmosphere sets it back to 1 when it configures)
+	if (Math::abs(env->get_ambient_light_sky_contribution() - ambient_strength) > 1e-3f) {
+		env->set_ambient_light_sky_contribution(ambient_strength);
+	}
 	// Overcast skies are darker and greyer; lightning flashes the whole frame
 	const float overcast = weather_enabled ? local.cloud : 0.0f;
 	const float exp_now = exposure * (1.0f - storm_exposure_drop * overcast) * (1.0f + lightning_brightness * flash);
@@ -546,6 +629,9 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 	wp.min_radius = storm_min_radius;
 	wp.max_radius = MAX(storm_max_radius, storm_min_radius);
 	wp.freeze_temperature = freeze_temperature;
+	wp.year_phase = year_phase;
+	wp.season_strength = season_strength;
+	wp.wet_season_strength = wet_season_strength;
 	wp.snow_rate = snow_rate;
 	wp.melt_rate = melt_rate;
 	wp.wet_rate = wet_rate;
@@ -560,26 +646,44 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 		weather.start_climate(planet ? (Object *)planet->get("generator") : nullptr);
 	}
 
+	const Vector3 up = (p_cam - state.center).normalized();
+	_update_override((float)p_delta, up);
 	const float wdt = (float)p_delta * weather_time_scale;
 	weather.step(wdt);
 	weather_accum += wdt;
 	weather_timer -= (float)p_delta;
-	if (weather_timer <= 0.0f) {
-		weather_timer = 0.25f;
-		weather.integrate(weather_accum, p_sun);
+	// The map is rebuilt on a worker (every 0.5 s: storms move ~4 m in that time, a texel is ~550 m)
+	if (weather_timer <= 0.0f && !weather.is_integrating()) {
+		weather_timer = 0.5f;
+		weather.integrate_async(weather_accum, p_sun);
 		weather_accum = 0.0f;
-		if (weather_texture.is_null()) {
+	}
+	if (weather.poll_integrate()) {
+		const bool first = weather_texture.is_null();
+		if (first) {
 			weather_texture = ImageTexture::create_from_image(weather.image);
+			rs->global_shader_parameter_set("eden_weather_map", weather_texture->get_rid());
 		} else {
 			weather_texture->update(weather.image);
 		}
-		rs->global_shader_parameter_set("eden_weather_map", weather_texture->get_rid());
-		rs->global_shader_parameter_set("eden_weather_planet", Vector4(state.center.x, state.center.y, state.center.z, state.planet_radius));
+		// Shaders skip weather entirely while there is nothing to show: z = snow or wet ground within ~2 km
+		// (grass, plants), w = anywhere on the map (terrain)
+		float near = MAX(weather.snow_at(up), weather.wetness_at(up));
+		const Vector3 t = up.get_any_perpendicular();
+		for (int k = 0; k < 8; k++) {
+			const Vector3 d = (up + t.rotated(up, Math::TAU * k / 8.0f) * (2000.0f / MAX(state.planet_radius, 1.0f))).normalized();
+			near = MAX(near, MAX(weather.snow_at(d), weather.wetness_at(d)));
+		}
 		const Vector4 planet_v(state.center.x, state.center.y, state.center.z, state.planet_radius);
-		const Vector4 params_v(snow_max_depth, wet_darkening, 0, 0);
+		const Vector4 params_v(snow_max_depth, wet_darkening, near > 0.01f ? 1.0f : 0.0f, weather.map_activity > 0.01f ? 1.0f : 0.0f);
 		const Vector4 snow_v(snow_color.r, snow_color.g, snow_color.b, 1.0f);
-		rs->global_shader_parameter_set("eden_weather_params", params_v);
-		rs->global_shader_parameter_set("eden_weather_snow", snow_v);
+		if (first || planet_v != weather_planet_pushed || params_v != weather_params_pushed) {
+			weather_planet_pushed = planet_v;
+			weather_params_pushed = params_v;
+			rs->global_shader_parameter_set("eden_weather_planet", planet_v);
+			rs->global_shader_parameter_set("eden_weather_params", params_v);
+			rs->global_shader_parameter_set("eden_weather_snow", snow_v);
+		}
 		Node3D *planet_node = _get_planet();
 		Ref<ShaderMaterial> terrain_mat = planet_node ? Ref<ShaderMaterial>(planet_node->get("material")) : Ref<ShaderMaterial>();
 		if (terrain_mat.is_valid()) {
@@ -597,7 +701,7 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 			}
 		}
 		// Storm clouds over the storms (EdenCloudShell's shader reads storm_map; looked up by class name)
-		Node *clouds = _find_class(_get_planet(), "EdenCloudShell", 0);
+		Node *clouds = _get_clouds();
 		if (clouds != nullptr) {
 			Ref<ShaderMaterial> m = clouds->call("get_material");
 			if (m.is_valid() && m->get_shader_parameter("storm_map") != Variant(weather_texture)) {
@@ -606,26 +710,27 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 		}
 	}
 
-	const Vector3 up = (p_cam - state.center).normalized();
 	local = weather.sample(up);
 	local_snow = weather.snow_at(up);
 	local_wet = weather.wetness_at(up);
 	const float t = state.temperature - 0.04f + 0.08f * MAX(p_sun.dot(up), 0.0f);
 	local_freezing = 1.0f - _smoothstep(freeze_temperature - 0.03f, freeze_temperature + 0.03f, t);
+	// Forced snow freezes, forced rain thaws, around the camera
+	if (ov_mode == WEATHER_SNOW) {
+		local_freezing = Math::lerp(local_freezing, 1.0f, ov_strength);
+	} else if (ov_mode == WEATHER_RAIN || ov_mode == WEATHER_THUNDERSTORM) {
+		local_freezing = Math::lerp(local_freezing, 0.0f, ov_strength);
+	}
 
 	// Clouds: storm cover on the map, plus the local overcast over the camera
-	Node *clouds = _find_class(_get_planet(), "EdenCloudShell", 0);
+	Node *clouds = _get_clouds();
 	if (clouds != nullptr) {
 		Ref<ShaderMaterial> m = clouds->call("get_material");
 		if (m.is_valid()) {
-			const float values[] = { local.cloud, overcast_radius, storm_cloud_coverage, storm_cloud_darkening };
-			const char *names[] = { "storm_local", "storm_local_radius", "storm_coverage", "storm_darkening" };
-			for (int i = 0; i < 4; i++) {
-				const Variant cur = m->get_shader_parameter(names[i]);
-				if (cur.get_type() != Variant::FLOAT || Math::abs((float)cur - values[i]) > 0.005f * MAX(1.0f, Math::abs(values[i]))) {
-					m->set_shader_parameter(names[i], values[i]);
-				}
-			}
+			_push(m, "storm_local", local.cloud);
+			_push(m, "storm_local_radius", overcast_radius);
+			_push(m, "storm_coverage", storm_cloud_coverage);
+			_push(m, "storm_darkening", storm_cloud_darkening);
 		}
 	}
 
@@ -640,6 +745,72 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 			}
 		}
 	}
+}
+
+// weather_override: a storm (or a clear zone) that follows the camera. Switching fades the old one out
+// before the new one fades in over override_fade.
+void EdenAmbience::_update_override(float p_delta, const Vector3 &p_up) {
+	const int target = CLAMP(weather_override, 0, WEATHER_MAX - 1);
+	if (target != ov_mode) {
+		ov_strength -= p_delta / 0.75f;
+		if (ov_strength <= 0.0f) {
+			ov_strength = 0.0f;
+			ov_mode = target;
+		}
+	} else if (ov_mode != WEATHER_AUTO) {
+		ov_strength = MIN(1.0f, ov_strength + p_delta / MAX(override_fade, 0.01f));
+	}
+	EdenWeatherSim::Override &o = weather.override_zone;
+	o.dir = p_up;
+	o.radius = override_radius / MAX(state.planet_radius, 1.0f);
+	o.strength = ov_strength;
+	o.temperature = 0;
+	EdenWeatherSim::Cell &c = o.cell;
+	c.dir = p_up;
+	c.radius = o.radius;
+	c.life = 1e9f;
+	c.age = 0.5e9f; // mid-life: full strength
+	c.drift = 0.0f;
+	c.thunder = false;
+	c.dust = false;
+	c.intensity = 0.85f;
+	switch (ov_mode) {
+		case WEATHER_CLEAR:
+			o.mode = EdenWeatherSim::Override::CLEAR;
+			break;
+		case WEATHER_RAIN:
+			o.mode = EdenWeatherSim::Override::STORM;
+			o.temperature = 1;
+			break;
+		case WEATHER_THUNDERSTORM:
+			o.mode = EdenWeatherSim::Override::STORM;
+			o.temperature = 1;
+			c.thunder = true;
+			c.intensity = 1.0f;
+			break;
+		case WEATHER_SNOW:
+			o.mode = EdenWeatherSim::Override::STORM;
+			o.temperature = -1;
+			break;
+		case WEATHER_DUST_STORM:
+			o.mode = EdenWeatherSim::Override::STORM;
+			c.dust = true;
+			c.intensity = 0.95f;
+			break;
+		default:
+			o.mode = EdenWeatherSim::Override::NONE;
+			break;
+	}
+}
+
+String EdenAmbience::get_weather_name() const {
+	static const char *names[WEATHER_MAX] = { "Auto", "Clear", "Rain", "Thunderstorm", "Snow", "Dust Storm" };
+	return names[CLAMP(weather_override, 0, WEATHER_MAX - 1)];
+}
+
+String EdenAmbience::cycle_weather(int p_step) {
+	set_weather_override(((weather_override + p_step) % WEATHER_MAX + WEATHER_MAX) % WEATHER_MAX);
+	return get_weather_name();
 }
 
 // Somewhere within the lightning distance range, biased into the camera's view so strikes get seen
@@ -688,7 +859,7 @@ void EdenAmbience::_strike(const Vector3 &p_ground, bool p_cloud_only) {
 	const Vector3 up = (p_ground - state.center).normalized();
 	// From the cloud base (EdenCloudShell's, when there is one) straight-ish down to the strike point
 	float cloud_base = 1500.0f;
-	Node *clouds = _find_class(planet, "EdenCloudShell", 0);
+	Node *clouds = _get_clouds();
 	if (clouds != nullptr) {
 		cloud_base = clouds->get("cloud_bottom");
 	}
@@ -789,7 +960,7 @@ void EdenAmbience::_update_bolts(double p_delta, const Vector3 &p_cam) {
 	// Clouds glow around the strike
 	if (cloud > 0.0f || cloud_flash > 0.0f) {
 		cloud_flash = cloud;
-		Node *clouds = _find_class(_get_planet(), "EdenCloudShell", 0);
+		Node *clouds = _get_clouds();
 		Ref<ShaderMaterial> m = clouds ? Ref<ShaderMaterial>(clouds->call("get_material")) : Ref<ShaderMaterial>();
 		if (m.is_valid()) {
 			m->set_shader_parameter("lightning_flash", cloud);
@@ -803,11 +974,32 @@ void EdenAmbience::_update_bolts(double p_delta, const Vector3 &p_cam) {
 
 void EdenAmbience::_update(double p_delta) {
 	time += p_delta;
+	// Seasons: the camera's temperature is the climate's mean plus the season there; shaders (foliage through
+	// globals, the terrain through its material) get the year's phase and the spin axis
+	{
+		const Vector4 cal(year_phase < 0.0f ? 0.0f : year_phase, season_strength, wet_season_strength, year_phase < 0.0f ? 0.0f : 1.0f);
+		if (cal != calendar_pushed) {
+			calendar_pushed = cal;
+			RenderingServer::get_singleton()->global_shader_parameter_set("eden_calendar", cal);
+			const Vector3 axis = weather.params.spin_axis;
+			RenderingServer::get_singleton()->global_shader_parameter_set("eden_calendar_axis", Vector4(axis.x, axis.y, axis.z, 0.0f));
+			Node3D *planet_node = _get_planet();
+			Ref<ShaderMaterial> terrain_mat = planet_node ? Ref<ShaderMaterial>(planet_node->get("material")) : Ref<ShaderMaterial>();
+			if (terrain_mat.is_valid()) {
+				terrain_mat->set_shader_parameter("eden_calendar", cal);
+				terrain_mat->set_shader_parameter("eden_calendar_axis", Vector4(axis.x, axis.y, axis.z, 0.0f));
+			}
+		}
+	}
 	Vector3 cam;
 	Basis cam_basis;
 	const bool have_cam = _get_camera(cam, &cam_basis);
 	if (have_cam) {
 		cam_forward = -cam_basis.get_column(2);
+	}
+	if (have_cam && state.valid) {
+		state.temperature = temperature_mean + weather.season_offset((cam - state.center).normalized());
+		state.moisture = CLAMP(moisture_mean + weather.wet_season_offset((cam - state.center).normalized()), 0.0f, 1.0f);
 	}
 	survey_timer -= (float)p_delta;
 	if (have_cam && survey_timer <= 0.0f) {
@@ -815,8 +1007,10 @@ void EdenAmbience::_update(double p_delta) {
 		_survey(cam);
 	}
 	source_timer -= (float)p_delta;
-	if (have_cam && source_timer <= 0.0f && (spatial_audio || biome_effects_enabled)) {
-		source_timer = 1.0f;
+	if (have_cam && (spatial_audio || biome_effects_enabled) && (sweep.active || source_timer <= 0.0f)) {
+		if (!sweep.active) {
+			source_timer = 1.0f;
+		}
 		_find_sound_sources(cam);
 	}
 
@@ -856,11 +1050,26 @@ void EdenAmbience::_update(double p_delta) {
 	Vector3 north = Vector3(0, 1, 0) - up * up.y;
 	north = north.length_squared() > 1e-6f ? north.normalized() : up.cross(Vector3(1, 0, 0)).normalized();
 	const Vector3 east = north.cross(up);
-	const float heading = Math::deg_to_rad(wind_heading);
+	// The heading wanders slowly around wind_heading (two incommensurate periods of ~5 and ~14 minutes)
+	const float wander = wind_wander * (0.7f * Math::sin((float)time * 0.021f) + 0.3f * Math::sin((float)time * 0.0073f + 2.0f));
+	const float heading = Math::deg_to_rad(wind_heading + wander);
 	const float gusts = MIN(gustiness + 0.4f * storm, 1.0f);
 	const float gust = 0.75f + 0.25f * Math::sin((float)time * 0.37f) * Math::sin((float)time * 0.13f + 1.0f) * (1.0f + gusts);
 	const float wind_now = wind_speed * (1.0f + storm_wind_boost * storm);
-	const Vector3 wind = (north * Math::cos(heading) + east * Math::sin(heading)) * wind_now * gust;
+	const Vector3 wind_dir = north * Math::cos(heading) + east * Math::sin(heading);
+	const Vector3 wind = wind_dir * wind_now * gust;
+	// For shaders (grass, trees): eden_wind = direction (world, at the camera) and speed in m/s; eden_wind_flow.x = how
+	// far the gust pattern has moved, wrapped at 4800 m (a multiple of the shaders' gust wavelengths), y = gustiness
+	wind_flow = Math::fmod(wind_flow + (double)(wind_now * gust) * p_delta, 4800.0);
+	{
+		const Vector4 w(wind_dir.x, wind_dir.y, wind_dir.z, wind_now * gust);
+		RenderingServer *rs = RenderingServer::get_singleton();
+		if (!w.is_equal_approx(wind_pushed)) {
+			wind_pushed = w;
+			rs->global_shader_parameter_set("eden_wind", w);
+		}
+		rs->global_shader_parameter_set("eden_wind_flow", Vector4((float)wind_flow, gusts, 0.0f, 0.0f));
+	}
 
 	// Particles
 	float ratio[FX_MAX] = {};
@@ -885,14 +1094,20 @@ void EdenAmbience::_update(double p_delta) {
 	{
 		const float wsum = MAX(m_ice + m_dust + m_pollen, 1e-3f);
 		const Color mc = (ice_crystal_color * m_ice + dust_mote_color * m_dust + pollen_color * m_pollen) / wsum;
-		fx_draw[FX_MOTES]->set_shader_parameter("color", Color(mc.r, mc.g, mc.b, 1.0f));
-		fx_draw[FX_MOTES]->set_shader_parameter("forward_scatter", 1.0f - 0.7f * m_dust / wsum - 0.5f * m_ice / wsum);
-		fx_draw[FX_MOTES]->set_shader_parameter("twinkle", m_ice / wsum);
-		// Leaves turn with the climate: summer green in warm country, autumn colours where it is cool
-		const float autumn = 1.0f - _smoothstep(0.3f, 0.5f, state.temperature);
+		_push(fx_draw[FX_MOTES], "color", Color(mc.r, mc.g, mc.b, 1.0f));
+		_push(fx_draw[FX_MOTES], "forward_scatter", 1.0f - 0.7f * m_dust / wsum - 0.5f * m_ice / wsum);
+		_push(fx_draw[FX_MOTES], "twinkle", m_ice / wsum);
+		// Leaves turn with the season (autumn in this hemisphere, where seasons are felt) and in cool country
+		float autumn = 1.0f - _smoothstep(0.3f, 0.5f, state.temperature);
+		if (year_phase >= 0.0f) {
+			const float sl = up.dot(weather.params.spin_axis);
+			const float w = Math::fposmod(year_phase + (sl < 0.0f ? 0.5f : 0.0f), 1.0f);
+			const float felt = _smoothstep(0.05f, 0.5f, Math::abs(sl));
+			autumn = MAX(autumn * 0.5f, _smoothstep(0.5f, 0.6f, w) * (1.0f - _smoothstep(0.78f, 0.86f, w)) * felt);
+		}
 		const Color lc = leaf_color_summer.lerp(leaf_color_autumn, autumn);
-		fx_draw[FX_LEAVES]->set_shader_parameter("color", Color(lc.r, lc.g, lc.b, 1.0f));
-		fx_draw[FX_LEAVES]->set_shader_parameter("color2", Color(lc.r * 0.8f, lc.g * 0.7f, lc.b * 0.6f, 1.0f).lerp(leaf_color_autumn, autumn * 0.5f));
+		_push(fx_draw[FX_LEAVES], "color", Color(lc.r, lc.g, lc.b, 1.0f));
+		_push(fx_draw[FX_LEAVES], "color2", Color(lc.r * 0.8f, lc.g * 0.7f, lc.b * 0.6f, 1.0f).lerp(leaf_color_autumn, autumn * 0.5f));
 	}
 
 	// Fog: light haze by day, thicker in humid country and on the coast, thinner in cold air and tinted
@@ -913,7 +1128,7 @@ void EdenAmbience::_update(double p_delta) {
 			fog_sun_saved = atmo->get("fog_sun_intensity");
 		}
 		// Storm cover dims the direct sun (the sky and ambient already darken through the grade)
-		atmo->set("sun_light_energy", sun_energy_saved * (1.0f - storm_sun_dimming * (weather_enabled ? MAX(local.cloud, dust_storm) : 0.0f)));
+		_atmo_set(atmo, "sun_light_energy", sun_energy_saved * (1.0f - storm_sun_dimming * (weather_enabled ? MAX(local.cloud, dust_storm) : 0.0f)));
 	}
 	if (drive_atmo && fog_enabled) {
 		const float humid = _smoothstep(0.3f, 0.8f, state.moisture) * (1.0f - cold * 0.5f);
@@ -931,18 +1146,18 @@ void EdenAmbience::_update(double p_delta) {
 			tint = (fog_albedo_saved + humid_haze_color * w_humid + dry_haze_color * (w_dry * 2.0f) + cold_haze_color * w_cold + coast_haze_color * w_coast) / wsum;
 		}
 		fog_tint = fog_tint.a < 0.0f ? tint : fog_tint.lerp(tint, k);
-		atmo->set("fog_density", haze + mist_density * mist);
+		_atmo_set(atmo, "fog_density", haze + mist_density * mist);
 		// mist can exceed 1 (thick storms add density), but the layer's shape stops at the mist's
 		const float shape = CLAMP(mist, 0.0f, 1.0f);
-		atmo->set("fog_height_falloff", Math::lerp(haze_height, mist_height, shape));
+		_atmo_set(atmo, "fog_height_falloff", Math::lerp(haze_height, mist_height, shape));
 		// The atmosphere measures fog altitude from its own planet_radius, which needn't be the terrain's
 		// sea level (the probe scene's sits 100 m lower)
 		const float atmo_radius = atmo->get("planet_radius");
 		const float sea_offset = atmo_radius > 0.0f ? state.planet_radius - atmo_radius : 0.0f;
-		atmo->set("fog_base_altitude", Math::lerp(fog_saved.z, sea_offset + mist_ground - mist_depth, shape));
-		atmo->set("fog_albedo", Color(fog_tint.r, fog_tint.g, fog_tint.b));
+		_atmo_set(atmo, "fog_base_altitude", Math::lerp(fog_saved.z, sea_offset + mist_ground - mist_depth, shape));
+		_atmo_set(atmo, "fog_albedo", Color(fog_tint.r, fog_tint.g, fog_tint.b));
 		// Dust is lit by the sun (a sunless scene fog would turn a tan dust storm grey-blue)
-		atmo->set("fog_sun_intensity", Math::lerp(fog_sun_saved, MAX(fog_sun_saved, 0.9f), dust_storm));
+		_atmo_set(atmo, "fog_sun_intensity", Math::lerp(fog_sun_saved, MAX(fog_sun_saved, 0.9f), dust_storm));
 	}
 	for (int i = 0; i < FX_MAX; i++) {
 		GPUParticles3D *p = fx[i];
@@ -965,18 +1180,22 @@ void EdenAmbience::_update(double p_delta) {
 		if (!p->is_emitting()) {
 			p->set_emitting(true);
 		}
-		p->set_amount_ratio(r);
-		p->set_global_transform(Transform3D(Basis(), cam));
-		fx_process[i]->set_shader_parameter("planet_center", state.center);
-		fx_process[i]->set_shader_parameter("ground_radius", ground_radius);
-		fx_process[i]->set_shader_parameter("wind", wind);
-		if (i == FX_RAIN) {
-			fx_process[i]->set_shader_parameter("fall_speed", 7.0f + 4.0f * r);
+		if (Math::abs(p->get_amount_ratio() - r) > 0.002f) {
+			p->set_amount_ratio(r);
 		}
-		fx_draw[i]->set_shader_parameter("planet_center", state.center);
-		fx_draw[i]->set_shader_parameter("sun_direction", sun_dir);
+		if (p->get_global_position() != cam) {
+			p->set_global_transform(Transform3D(Basis(), cam));
+		}
+		_push(fx_process[i], "planet_center", state.center);
+		_push(fx_process[i], "ground_radius", ground_radius);
+		_push(fx_process[i], "wind", wind);
+		if (i == FX_RAIN) {
+			_push(fx_process[i], "fall_speed", 7.0f + 4.0f * r);
+		}
+		_push(fx_draw[i], "planet_center", state.center);
+		_push(fx_draw[i], "sun_direction", sun_dir);
 		const bool lit = i == FX_SNOW || i == FX_RAIN || i == FX_LEAVES || i == FX_DUST;
-		fx_draw[i]->set_shader_parameter("intensity", lit ? ambient * (1.0f + 3.0f * flash) : 1.0f);
+		_push(fx_draw[i], "intensity", lit ? ambient * (1.0f + 3.0f * flash) : 1.0f);
 	}
 
 	// Soundscape
@@ -996,7 +1215,9 @@ void EdenAmbience::_update(double p_delta) {
 		soundscape->set_level(AudioStreamEdenAmbience::LAYER_RAIN, rain_volume * CLAMP(ratio[FX_RAIN], 0.0f, 1.0f) * (1.0f - _smoothstep(200.0f, 1500.0f, state.altitude)));
 		soundscape->gustiness.store(gusts);
 		soundscape->thunder_gain.store(thunder_volume);
-		player->set_volume_db(volume_db);
+		if (player->get_volume_db() != volume_db) {
+			player->set_volume_db(volume_db);
+		}
 		if (want && !player->is_playing()) {
 			player->play();
 		} else if (!want && player->is_playing()) {
@@ -1018,10 +1239,12 @@ void EdenAmbience::_notification(int p_what) {
 			// Shaders read the weather through these; a project declares them in [shader_globals] so the
 			// editor can compile shaders that use them, otherwise they are created here at runtime
 			RenderingServer *rs = RenderingServer::get_singleton();
-			const char *names[] = { "eden_weather_map", "eden_weather_planet", "eden_weather_params", "eden_weather_snow" };
-			const RS::GlobalShaderParameterType types[] = { RS::GLOBAL_VAR_TYPE_SAMPLER2D, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4 };
-			const Variant values[] = { RID(), Vector4(), Vector4(), Vector4() };
-			for (int i = 0; i < 4; i++) {
+			const char *names[] = { "eden_weather_map", "eden_weather_planet", "eden_weather_params", "eden_weather_snow", "eden_wind", "eden_wind_flow",
+				"eden_calendar", "eden_calendar_axis" };
+			const RS::GlobalShaderParameterType types[] = { RS::GLOBAL_VAR_TYPE_SAMPLER2D, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4,
+				RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4 };
+			const Variant values[] = { RID(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4() };
+			for (int i = 0; i < 8; i++) {
 				if (!globals_added && !ProjectSettings::get_singleton()->has_setting(String("shader_globals/") + names[i])) {
 					rs->global_shader_parameter_add(names[i], types[i], values[i]);
 				}
@@ -1029,7 +1252,20 @@ void EdenAmbience::_notification(int p_what) {
 			globals_added = true;
 		} break;
 		case NOTIFICATION_INTERNAL_PROCESS: {
+			const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
 			_update(get_process_delta_time());
+			// CPU cost, averaged and peaked over the last second (get_debug_state)
+			const uint64_t us = OS::get_singleton()->get_ticks_usec() - t0;
+			cost_sum += us;
+			cost_peak_acc = MAX(cost_peak_acc, us);
+			cost_frames++;
+			if (OS::get_singleton()->get_ticks_usec() - cost_window_start > 1000000) {
+				cost_avg_us = cost_frames > 0 ? float(cost_sum) / cost_frames : 0.0f;
+				cost_peak_us = float(cost_peak_acc);
+				cost_sum = cost_peak_acc = 0;
+				cost_frames = 0;
+				cost_window_start = OS::get_singleton()->get_ticks_usec();
+			}
 		} break;
 		// The driven fog values must not end up saved into the scene's atmosphere
 		case NOTIFICATION_EDITOR_PRE_SAVE:
@@ -1044,6 +1280,9 @@ void EdenAmbience::_notification(int p_what) {
 			if (terrain_mat.is_valid()) {
 				terrain_mat->set_shader_parameter("eden_weather_map", Variant());
 				terrain_mat->set_shader_parameter("eden_weather_planet", Variant());
+				terrain_mat->set_shader_parameter("eden_calendar", Variant());
+				terrain_mat->set_shader_parameter("eden_calendar_axis", Variant());
+				calendar_pushed = Vector4(-9, -9, -9, -9); // set again next update
 				terrain_mat->set_shader_parameter("eden_weather_params", Variant());
 				terrain_mat->set_shader_parameter("eden_weather_snow", Variant());
 				weather_timer = 0.0f;
@@ -1057,15 +1296,16 @@ void EdenAmbience::_restore_fog() {
 	// then resolve node paths and error, and nothing is left to show the values anyway
 	Node *atmo = Object::cast_to<Node>(ObjectDB::get_instance(fog_atmo));
 	if (atmo != nullptr && atmo->is_inside_tree()) {
-		atmo->set("fog_density", fog_saved.x);
-		atmo->set("fog_height_falloff", fog_saved.y);
-		atmo->set("fog_base_altitude", fog_saved.z);
-		atmo->set("sun_light_energy", sun_energy_saved);
-		atmo->set("fog_albedo", fog_albedo_saved);
-		atmo->set("fog_sun_intensity", fog_sun_saved);
+		_atmo_set(atmo, "fog_density", fog_saved.x);
+		_atmo_set(atmo, "fog_height_falloff", fog_saved.y);
+		_atmo_set(atmo, "fog_base_altitude", fog_saved.z);
+		_atmo_set(atmo, "sun_light_energy", sun_energy_saved);
+		_atmo_set(atmo, "fog_albedo", fog_albedo_saved);
+		_atmo_set(atmo, "fog_sun_intensity", fog_sun_saved);
 	}
 	fog_atmo = ObjectID();
 	fog_tint = Color(0, 0, 0, -1);
+	atmo_pushed.clear();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1203,6 +1443,15 @@ Dictionary EdenAmbience::get_debug_state() const {
 	}
 	d["active_bolts"] = active;
 	d["flash"] = flash;
+	d["cpu_avg_us"] = cost_avg_us;
+	d["weather"] = get_weather_name();
+	// Wind at the camera (world direction it blows toward, m/s with gusts) and the season's temperature change there
+	d["wind_direction"] = Vector3(wind_pushed.x, wind_pushed.y, wind_pushed.z);
+	d["wind_speed"] = wind_pushed.w;
+	d["temperature_mean"] = temperature_mean;
+	d["moisture_mean"] = moisture_mean;
+	d["override_strength"] = ov_strength;
+	d["cpu_peak_us"] = cost_peak_us;
 	return d;
 }
 
@@ -1223,6 +1472,8 @@ void EdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_storm", "world_position", "radius", "intensity", "duration", "thunder", "dust"), &EdenAmbience::add_storm, DEFVAL(false), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("clear_snow_and_wetness"), &EdenAmbience::clear_snow_and_wetness);
 	ClassDB::bind_method(D_METHOD("strike_lightning", "world_position", "cloud_only"), &EdenAmbience::strike_lightning, DEFVAL(Vector3()), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("cycle_weather", "step"), &EdenAmbience::cycle_weather, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("get_weather_name"), &EdenAmbience::get_weather_name);
 	ClassDB::bind_method(D_METHOD("get_weather_texture"), &EdenAmbience::get_weather_texture);
 
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "planet_path", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "Node3D"), "set_planet_path", "get_planet_path");
@@ -1245,4 +1496,11 @@ void EdenAmbience::_bind_methods() {
 	BIND_ENUM_CONSTANT(FX_LEAVES);
 	BIND_ENUM_CONSTANT(FX_DUST);
 	BIND_ENUM_CONSTANT(FX_MAX);
+	BIND_ENUM_CONSTANT(WEATHER_AUTO);
+	BIND_ENUM_CONSTANT(WEATHER_CLEAR);
+	BIND_ENUM_CONSTANT(WEATHER_RAIN);
+	BIND_ENUM_CONSTANT(WEATHER_THUNDERSTORM);
+	BIND_ENUM_CONSTANT(WEATHER_SNOW);
+	BIND_ENUM_CONSTANT(WEATHER_DUST_STORM);
+	BIND_ENUM_CONSTANT(WEATHER_MAX);
 }

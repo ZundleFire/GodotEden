@@ -41,6 +41,12 @@ public:
 		float humidity_bias = 0.88f; // 0 = storms form anywhere, 1 = only over humid ground
 		float thunder_chance = 0.5f; // of storms forming in warm, humid air
 		float dust_chance = 0.2f; // of new storms being dust storms over hot, dry ground
+		// Seasons (EdenCalendar through EdenAmbience): the year's phase, 0 = the northern spring equinox, < 0 = no
+		// seasons; the swing in climate temperature toward the poles; the planet's spin axis
+		float year_phase = -1.0f;
+		float season_strength = 0.25f;
+		float wet_season_strength = 0.25f; // tropical wet/dry swing in climate moisture (0..1)
+		Vector3 spin_axis = Vector3(0, 1, 0);
 		uint32_t seed = 1;
 	};
 
@@ -52,6 +58,23 @@ public:
 	};
 
 	Params params;
+	// Weather forced around a point (EdenAmbience.weather_override): a storm that follows it, or a clear zone
+	// that suppresses the natural cells there, with freezing (snow) or thawing (rain) forced inside
+	struct Override {
+		enum Mode {
+			NONE,
+			CLEAR,
+			STORM,
+		};
+		Mode mode = NONE;
+		Vector3 dir = Vector3(0, 1, 0);
+		float radius = 0.15f; // angular
+		float strength = 0.0f; // 0..1, eased by the caller
+		Cell cell; // STORM: its shape and kind; dir and radius are the override's
+		int temperature = 0; // -1 force freezing, +1 force thaw, 0 as the climate says
+	};
+	Override override_zone;
+
 	float planet_radius = 40000.0f;
 	double time = 0.0;
 	LocalVector<Cell> cells; // the first `natural` roam; any after were added by add_cell()
@@ -68,10 +91,44 @@ public:
 	void step(float p_dt);
 	// Integrates snow/wetness over `p_dt` weather-seconds and rewrites the map image.
 	void integrate(float p_dt, const Vector3 &p_sun_dir);
+	// The same on a worker thread (with a snapshot of the cells). poll_integrate() returns true once, on the
+	// main thread, when a new map is in `image`.
+	void integrate_async(float p_dt, const Vector3 &p_sun_dir);
+	bool poll_integrate();
+	bool is_integrating() const { return integrate_task != WorkerThreadPool::INVALID_TASK_ID; }
+	// Largest snow cover or wetness anywhere on the map after the last integrate (shaders skip weather when 0)
+	float map_activity = 0.0f;
 	Sample sample(const Vector3 &p_dir) const;
-	float snow_at(const Vector3 &p_dir) const { return _texel(snow, p_dir); }
+	// Snow on the ground: storm snow or the season's lying snow, whichever is deeper (what the map's G channel holds)
+	float snow_at(const Vector3 &p_dir) const { return ground_snow.size() == snow.size() ? _texel(ground_snow, p_dir) : _texel(snow, p_dir); }
 	float wetness_at(const Vector3 &p_dir) const { return _texel(wet, p_dir); }
-	float temperature_at(const Vector3 &p_dir) const { return climate_ready.load() ? _texel(temperature, p_dir) : 0.5f; }
+	float temperature_at(const Vector3 &p_dir) const { return (climate_ready.load() ? _texel(temperature, p_dir) : 0.5f) + season_offset(p_dir); }
+	// Tropical wet and dry seasons: the rain belt follows the overhead sun, so the tropics are wettest in their own
+	// summer and driest in their winter (a change to climate moisture); nothing on the equator itself, where the
+	// belt passes twice a year, or outside the tropics
+	float wet_season_offset(const Vector3 &p_dir) const {
+		if (params.year_phase < 0.0f) {
+			return 0.0f;
+		}
+		const float s = p_dir.dot(params.spin_axis);
+		const float a = Math::abs(s);
+		const float in = CLAMP((a - 0.03f) / 0.17f, 0.0f, 1.0f);
+		const float out = CLAMP((a - 0.38f) / 0.14f, 0.0f, 1.0f);
+		const float tropics = in * in * (3.0f - 2.0f * in) * (1.0f - out * out * (3.0f - 2.0f * out));
+		const float phase = params.year_phase + (s < 0.0f ? 0.5f : 0.0f);
+		return params.wet_season_strength * tropics * Math::sin((float)Math::TAU * (phase - 0.1f));
+	}
+	// The season's change to the climate temperature at a direction: none at the equator, growing toward the poles,
+	// opposite in the two hemispheres, warmest about a month after the summer solstice
+	float season_offset(const Vector3 &p_dir) const {
+		if (params.year_phase < 0.0f) {
+			return 0.0f;
+		}
+		const float s = p_dir.dot(params.spin_axis); // sine of the latitude
+		const float phase = params.year_phase + (s < 0.0f ? 0.5f : 0.0f);
+		const float a = CLAMP((Math::abs(s) - 0.05f) / 0.85f, 0.0f, 1.0f);
+		return params.season_strength * a * a * (3.0f - 2.0f * a) * Math::sin((float)Math::TAU * (phase - 0.08f));
+	}
 
 	// A storm of `p_radius` metres at `p_dir`, lasting `p_duration` weather-seconds (tests, gameplay).
 	void add_cell(const Vector3 &p_dir, float p_radius, float p_intensity, float p_duration, bool p_thunder, bool p_dust = false);
@@ -88,6 +145,7 @@ public:
 private:
 	uint32_t rng = 1;
 	LocalVector<float> temperature, moisture; // climate grid (filled by the worker)
+	LocalVector<float> ground_snow; // snow cover including the season's lying snow (see _integrate)
 	LocalVector<float> snow, wet, precip, cloud;
 	LocalVector<Vector3> dirs;
 	std::atomic<bool> climate_ready{ false };
@@ -105,4 +163,15 @@ private:
 	void _cell_contrib(const Cell &p_cell, const Vector3 &p_dir, float &r_precip, float &r_cloud) const;
 	float _texel(const LocalVector<float> &p_grid, const Vector3 &p_dir) const;
 	static void _bake_climate(void *p_self);
+	float _override_weight(const Override &p_o, const Vector3 &p_dir) const;
+	void _integrate(const LocalVector<Cell> &p_cells, const Override &p_o, float p_dt, const Vector3 &p_sun_dir, Ref<Image> &r_image);
+
+	// async integrate
+	LocalVector<Cell> job_cells;
+	Override job_override;
+	float job_dt = 0.0f;
+	Vector3 job_sun;
+	Ref<Image> job_image;
+	WorkerThreadPool::TaskID integrate_task = WorkerThreadPool::INVALID_TASK_ID;
+	static void _integrate_job(void *p_self);
 };

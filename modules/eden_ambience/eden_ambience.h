@@ -32,6 +32,7 @@ static inline PackedColorArray _eden_default_bolt_colors() {
 	X(float, exposure, 0.75f, PROPERTY_HINT_RANGE, "0.05,4.0,0.01", "Look")                                     \
 	X(float, white, 1.0f, PROPERTY_HINT_RANGE, "0.5,16.0,0.01", "Look")                                         \
 	X(float, contrast, 1.08f, PROPERTY_HINT_RANGE, "0.5,2.0,0.01", "Look")                                      \
+	X(float, ambient_strength, 0.5f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Look")                               \
 	X(float, saturation, 1.2f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Look")                                     \
 	X(bool, ssao_enabled, true, PROPERTY_HINT_NONE, "", "Look")                                                 \
 	X(float, ssao_intensity, 1.5f, PROPERTY_HINT_RANGE, "0.0,8.0,0.01", "Look")                                 \
@@ -78,7 +79,11 @@ static inline PackedColorArray _eden_default_bolt_colors() {
 	X(float, wind_speed, 2.0f, PROPERTY_HINT_RANGE, "0.0,30.0,0.1,suffix:m/s", "Wind")                          \
 	X(float, wind_heading, 30.0f, PROPERTY_HINT_RANGE, "0,360,1,degrees", "Wind")                               \
 	X(float, gustiness, 0.5f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Wind")                                      \
+	X(float, wind_wander, 40.0f, PROPERTY_HINT_RANGE, "0,180,1,degrees", "Wind")                                \
 	X(bool, weather_enabled, true, PROPERTY_HINT_NONE, "", "Weather")                                           \
+	X(int, weather_override, 0, PROPERTY_HINT_ENUM, "Auto,Clear,Rain,Thunderstorm,Snow,Dust Storm", "Weather")  \
+	X(float, override_radius, 6000.0f, PROPERTY_HINT_RANGE, "500,50000,10,suffix:m", "Weather")                 \
+	X(float, override_fade, 4.0f, PROPERTY_HINT_RANGE, "0.0,60.0,0.1,suffix:s", "Weather")                      \
 	X(int, weather_seed, 1, PROPERTY_HINT_RANGE, "0,100000,1", "Weather")                                       \
 	X(int, storm_count, 48, PROPERTY_HINT_RANGE, "0,256,1", "Weather")                                          \
 	X(float, storm_speed, 8.0f, PROPERTY_HINT_RANGE, "0.0,60.0,0.1,suffix:m/s", "Weather")                      \
@@ -86,6 +91,9 @@ static inline PackedColorArray _eden_default_bolt_colors() {
 	X(float, storm_max_radius, 6000.0f, PROPERTY_HINT_RANGE, "100,50000,10,suffix:m", "Weather")                \
 	X(float, weather_time_scale, 1.0f, PROPERTY_HINT_RANGE, "0.0,100.0,0.01,or_greater", "Weather")             \
 	X(float, freeze_temperature, 0.3f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Weather")                          \
+	X(float, year_phase, -1.0f, PROPERTY_HINT_RANGE, "-1.0,1.0,0.001", "Seasons")                                \
+	X(float, season_strength, 0.25f, PROPERTY_HINT_RANGE, "0.0,0.6,0.01", "Seasons")                             \
+	X(float, wet_season_strength, 0.25f, PROPERTY_HINT_RANGE, "0.0,0.6,0.01", "Seasons")                         \
 	X(float, snow_rate, 0.5f, PROPERTY_HINT_RANGE, "0.0,10.0,0.01,suffix:/min", "Weather")                      \
 	X(float, melt_rate, 0.25f, PROPERTY_HINT_RANGE, "0.0,10.0,0.01,suffix:/min", "Weather")                     \
 	X(float, snow_max_depth, 0.35f, PROPERTY_HINT_RANGE, "0.0,3.0,0.01,suffix:m", "Weather")                    \
@@ -151,6 +159,17 @@ class EdenAmbience : public Node3D {
 	GDCLASS(EdenAmbience, Node3D);
 
 public:
+	// weather_override: forced around the camera (cycle_weather() steps through them)
+	enum WeatherOverride {
+		WEATHER_AUTO,
+		WEATHER_CLEAR,
+		WEATHER_RAIN,
+		WEATHER_THUNDERSTORM,
+		WEATHER_SNOW,
+		WEATHER_DUST_STORM,
+		WEATHER_MAX,
+	};
+
 	enum Effect {
 		FX_MOTES,
 		FX_FIREFLIES,
@@ -191,6 +210,12 @@ private:
 	Color fog_tint = Color(0, 0, 0, -1); // eased biome tint; alpha < 0 until the first update
 	Vector4 biome_weights; // desert, tropical, cold, coast at the camera
 	double time = 0.0;
+	// Distance the wind's gust pattern has travelled (m), wrapped: shaders scroll gust bands across the grass by it
+	double wind_flow = 0.0;
+	Vector4 wind_pushed;
+	Vector4 calendar_pushed = Vector4(-9, -9, -9, -9);
+	float temperature_mean = 0.5f;
+	float moisture_mean = 0.5f; // likewise: state.moisture adds the tropical wet/dry season // the climate's annual mean at the camera (state.temperature adds the season)
 
 	// Weather
 	EdenWeatherSim weather;
@@ -223,6 +248,10 @@ private:
 	RandomPCG bolt_rng;
 	Vector3 cam_forward = Vector3(0, 0, -1);
 	float cloud_flash = 0.0f;
+	// Profiling (get_debug_state)
+	uint64_t cost_sum = 0, cost_peak_acc = 0, cost_window_start = 0;
+	int cost_frames = 0;
+	float cost_avg_us = 0.0f, cost_peak_us = 0.0f;
 	Color cloud_flash_color;
 
 	// Spatial audio: surf from the nearest shorelines, rustling from the nearest dense forest. Plain
@@ -240,6 +269,32 @@ private:
 	Emitter surf_emitters[SURF_EMITTERS];
 	Emitter leaf_emitters[LEAF_EMITTERS];
 	float source_timer = 0.0f;
+	struct SoundCandidate {
+		Vector3 pos;
+		float dist, az, strength;
+	};
+	// The source search in progress (see _find_sound_sources)
+	struct SourceSweep {
+		bool active = false;
+		int bearing = 0;
+		float R = 0.0f;
+		Vector3 center, up, t, b;
+		bool cam_water = false;
+		LocalVector<SoundCandidate> shore, forest;
+		float forest_here = -1.0f;
+	};
+	static constexpr int SWEEP_BEARINGS = 16;
+	static constexpr int SWEEP_BEARINGS_PER_FRAME = 2;
+	SourceSweep sweep;
+
+	// Cached scene lookups (revalidated when the node goes away)
+	mutable ObjectID atmo_cache, clouds_cache, foliage_cache;
+	// Last values pushed to the atmosphere: set() only when they change
+	HashMap<StringName, Variant> atmo_pushed;
+	Vector4 weather_params_pushed = Vector4(-1, -1, -1, -1);
+	Vector4 weather_planet_pushed;
+	float ov_strength = 0.0f;
+	int ov_mode = WEATHER_AUTO;
 	float forest_here = -1.0f; // forest density within ~25 m (< 0: no foliage node to ask)
 	float applied_exposure = -1.0f, applied_saturation = -1.0f;
 
@@ -260,6 +315,10 @@ private:
 
 	Node3D *_get_planet() const;
 	Node *_get_atmosphere() const;
+	Node *_get_clouds() const;
+	Node *_get_foliage() const;
+	void _atmo_set(Node *p_atmo, const StringName &p_name, const Variant &p_value);
+	void _update_override(float p_delta, const Vector3 &p_up);
 	bool _get_camera(Vector3 &r_pos, Basis *r_basis = nullptr) const;
 	void _build();
 	void _survey(const Vector3 &p_cam);
@@ -303,9 +362,13 @@ public:
 	// A lightning strike at a world position on the ground (Vector3() = somewhere around the camera, as the
 	// storms pick), or a flash inside the cloud above it.
 	void strike_lightning(const Vector3 &p_world_position, bool p_cloud_only);
+	// Steps weather_override (Auto, Clear, Rain, Thunderstorm, Snow, Dust Storm) and returns the new one's name
+	String cycle_weather(int p_step);
+	String get_weather_name() const;
 	Ref<ImageTexture> get_weather_texture() const;
 
 	EdenAmbience();
 };
 
 VARIANT_ENUM_CAST(EdenAmbience::Effect);
+VARIANT_ENUM_CAST(EdenAmbience::WeatherOverride);

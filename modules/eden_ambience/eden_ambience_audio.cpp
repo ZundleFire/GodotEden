@@ -76,11 +76,26 @@ void AudioStreamEdenAmbience::trigger_thunder(float p_delay, float p_distance) {
 	thunder_serial.fetch_add(1, std::memory_order_release);
 }
 
+void AudioStreamEdenAmbience::trigger_footstep(int p_surface, float p_strength, float p_pan) {
+	step_surface.store(p_surface, std::memory_order_relaxed);
+	step_strength.store(CLAMP(p_strength, 0.0f, 2.0f), std::memory_order_relaxed);
+	step_pan.store(CLAMP(p_pan, -1.0f, 1.0f), std::memory_order_relaxed);
+	step_serial.fetch_add(1, std::memory_order_release);
+}
+
 void AudioStreamEdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_level", "layer", "level"), &AudioStreamEdenAmbience::set_level);
 	ClassDB::bind_method(D_METHOD("get_level", "layer"), &AudioStreamEdenAmbience::get_level);
 	ClassDB::bind_method(D_METHOD("render", "seconds", "seed", "thunder"), &AudioStreamEdenAmbience::render, DEFVAL(1), DEFVAL(PackedVector2Array()));
 	ClassDB::bind_method(D_METHOD("trigger_thunder", "delay", "distance"), &AudioStreamEdenAmbience::trigger_thunder);
+	ClassDB::bind_method(D_METHOD("trigger_footstep", "surface", "strength", "pan"), &AudioStreamEdenAmbience::trigger_footstep, DEFVAL(1.0f), DEFVAL(0.0f));
+	BIND_ENUM_CONSTANT(SURFACE_GRASS);
+	BIND_ENUM_CONSTANT(SURFACE_ROCK);
+	BIND_ENUM_CONSTANT(SURFACE_SNOW);
+	BIND_ENUM_CONSTANT(SURFACE_SAND);
+	BIND_ENUM_CONSTANT(SURFACE_DIRT);
+	BIND_ENUM_CONSTANT(SURFACE_MOSS);
+	BIND_ENUM_CONSTANT(SURFACE_WET);
 
 	BIND_ENUM_CONSTANT(LAYER_WIND);
 	BIND_ENUM_CONSTANT(LAYER_LEAVES);
@@ -349,6 +364,31 @@ void AudioStreamPlaybackEdenAmbience::_frame(float &r_l, float &r_r) {
 		slot->t = -s->thunder_delay.load(std::memory_order_relaxed);
 		slot->dist = CLAMP(s->thunder_distance.load(std::memory_order_relaxed), 0.0f, 1.0f);
 	}
+	// Footsteps
+	const uint32_t step_ser = s->step_serial.load(std::memory_order_acquire);
+	if (step_ser != step_seen) {
+		step_seen = step_ser;
+		Step *slot = &steps[0];
+		for (Step &st : steps) {
+			if (!st.active || st.t > slot->t) {
+				slot = &st;
+				if (!st.active) {
+					break;
+				}
+			}
+		}
+		*slot = Step();
+		slot->active = true;
+		slot->surface = s->step_surface.load(std::memory_order_relaxed);
+		slot->strength = s->step_strength.load(std::memory_order_relaxed) * _range(0.8f, 1.1f);
+		slot->pan = s->step_pan.load(std::memory_order_relaxed);
+	}
+	for (Step &st : steps) {
+		if (st.active) {
+			_step_frame(st, l, r);
+		}
+	}
+
 	const float thunder_gain = s->thunder_gain.load(std::memory_order_relaxed);
 	for (Thunder &th : thunders) {
 		if (th.active) {
@@ -378,6 +418,70 @@ void AudioStreamPlaybackEdenAmbience::_frame(float &r_l, float &r_r) {
 	r *= cur_gain * MIN(1.0f, 1.0f + cur_pan);
 	r_l = std::tanh(l);
 	r_r = std::tanh(r);
+}
+
+// One footstep: a soft heel thump under every surface, plus the surface's own sound -- grass rustles, dirt
+// thuds, rock clicks with a short ring, sand hisses, snow crunches (a burst of tiny grains), wet ground splashes
+void AudioStreamPlaybackEdenAmbience::_step_frame(Step &p_step, float &r_l, float &r_r) {
+	constexpr float dt = 1.0f / RATE;
+	p_step.t += dt;
+	const float T = p_step.t;
+	if (T > 0.35f) {
+		p_step.active = false;
+		return;
+	}
+	const float n = _noise();
+	const float a_thump = _lp_coef(260.0f, RATE);
+	p_step.thump += (n - p_step.thump) * a_thump;
+	const float thump = p_step.thump / std::sqrt(a_thump) * 0.12f * std::exp(-T / 0.03f) * _smoothstep(0.0f, 0.004f, T);
+	float v = 0.0f;
+	switch (p_step.surface) {
+		case AudioStreamEdenAmbience::SURFACE_ROCK: {
+			const float click = n * std::exp(-T / 0.004f) * 0.35f;
+			p_step.ring += 2300.0f * dt;
+			const float ring = std::sin(TAU_F * p_step.ring) * std::exp(-T / 0.03f) * 0.06f;
+			v = thump * 0.8f + click + ring;
+		} break;
+		case AudioStreamEdenAmbience::SURFACE_DIRT: {
+			const float f = 2.0f * std::sin(Math::PI * 700.0f / RATE);
+			const float mid = _svf_band(n, f, 1.2f, p_step.band_low, p_step.band) * std::exp(-T / 0.05f) * 0.18f;
+			v = thump * 1.2f + mid;
+		} break;
+		case AudioStreamEdenAmbience::SURFACE_SAND: {
+			p_step.low += (n - p_step.low) * _lp_coef(900.0f, RATE);
+			const float hiss = (n - p_step.low) * _smoothstep(0.0f, 0.03f, T) * std::exp(-T / 0.1f) * 0.14f;
+			v = thump * 0.6f + hiss;
+		} break;
+		case AudioStreamEdenAmbience::SURFACE_SNOW: {
+			// Grains snapping: random impulses, dense at first, band-limited so they crunch rather than tick
+			const float env = _smoothstep(0.0f, 0.015f, T) * std::exp(-T / 0.07f);
+			if (_rand() < 900.0f * dt * env) {
+				p_step.crunch = _noise();
+			}
+			p_step.crunch *= 0.85f;
+			const float f = 2.0f * std::sin(Math::PI * 2200.0f / RATE);
+			v = thump * 0.7f + _svf_band(p_step.crunch, f, 0.9f, p_step.band_low, p_step.band) * 0.5f;
+		} break;
+		case AudioStreamEdenAmbience::SURFACE_WET: {
+			const float f = 2.0f * std::sin(Math::PI * 1500.0f / RATE);
+			const float splash = _svf_band(n, f, 0.8f, p_step.band_low, p_step.band) * std::exp(-T / 0.08f) * 0.3f;
+			p_step.ring += Math::lerp(750.0f, 320.0f, MIN(T / 0.12f, 1.0f)) * dt;
+			const float bubble = std::sin(TAU_F * p_step.ring) * std::exp(-T / 0.05f) * _smoothstep(0.01f, 0.03f, T) * 0.05f;
+			v = thump * 0.5f + splash + bubble;
+		} break;
+		default: { // grass, moss
+			p_step.low += (n - p_step.low) * _lp_coef(1500.0f, RATE);
+			const float swish = (n - p_step.low) * _smoothstep(0.0f, 0.012f, T) * std::exp(-T / 0.07f);
+			if (_rand() < 60.0f * dt) {
+				p_step.crunch = 0.4f + 0.6f * _rand(); // blades brushing: an uneven rustle
+			}
+			p_step.crunch += (0.5f - p_step.crunch) * dt * 30.0f;
+			v = thump * 0.6f + swish * 0.16f * p_step.crunch * 2.0f;
+		} break;
+	}
+	v *= p_step.strength;
+	r_l += v * std::sqrt(0.5f * (1.0f - p_step.pan)) * 1.41f;
+	r_r += v * std::sqrt(0.5f * (1.0f + p_step.pan)) * 1.41f;
 }
 
 // One thunder strike, modelled on a recorded close strike: a ~100 ms swell into a broadband crack (the first

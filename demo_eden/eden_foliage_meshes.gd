@@ -29,6 +29,7 @@ static func get_material(wind := true) -> Material:
 		if _wind_material == null:
 			_wind_material = ShaderMaterial.new()
 			_wind_material.shader = load("res://shaders/eden_tree_lowpoly.gdshader")
+			_wind_material.set_shader_parameter("u_deciduous", true) # (EdenFoliage overrides it for evergreens)
 		return _wind_material
 	if _static_material == null: # the plant shader without sway, so rocks and wood take snow and rain too
 		_static_material = ShaderMaterial.new()
@@ -84,6 +85,36 @@ static func build_far(layer: EdenFoliageLayer, variant: int, resolution := 0) ->
 		else:
 			_cache[key] = voxelize(build(layer, variant).mesh, res)
 	return _cache[key]
+
+
+## Middle-distance copy of a layer variant's mesh: the same shape and colours with about `ratio` of its triangles
+## (Godot's mesh simplifier, the LOD the importer would generate). Meshes already under `min_tris` come back as they
+## are. Cached.
+static func build_simplified(layer: EdenFoliageLayer, variant: int, ratio: float, min_tris := 400) -> Mesh:
+	var key := ["mid", ratio, layer.kind, variant, layer.rock_color, layer.color_variation, layer.moss,
+			layer.moss_color, layer.lichen, layer.lichen_color, layer.facet_detail, layer.stretch, layer.roughness]
+	if _cache.has(key):
+		return _cache[key]
+	var src: Mesh = build(layer, variant).mesh
+	var out := ArrayMesh.new()
+	for s in src.get_surface_count():
+		var arrays := src.surface_get_arrays(s)
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		if indices.size() / 3 > min_tris:
+			var im := ImporterMesh.new()
+			im.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			im.generate_lods(60.0, 25.0, [])
+			# The generated LOD closest to the wanted triangle count
+			var want := indices.size() * ratio
+			for l in im.get_surface_lod_count(0):
+				var lod := im.get_surface_lod_indices(0, l)
+				if absf(lod.size() - want) < absf(indices.size() - want):
+					indices = lod
+			arrays[Mesh.ARRAY_INDEX] = indices
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		out.surface_set_material(s, src.surface_get_material(s))
+	_cache[key] = out
+	return out
 
 
 ## Blocky low-poly copy of a vertex-coloured mesh: cells the surface passes through (and everything they enclose)

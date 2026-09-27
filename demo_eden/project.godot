@@ -45,3 +45,19 @@ eden_weather_snow={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+eden_wind={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_wind_flow={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_calendar={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_calendar_axis={
+"type": "vec4",
+"value": Vector4(0, 1, 0, 0)
+}

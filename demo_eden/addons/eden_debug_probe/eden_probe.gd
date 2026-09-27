@@ -92,8 +92,8 @@ static func describe(terrain: VoxelLodTerrain, p: Vector3, camera_world: Vector3
 	sections.append(["Generator (V4)", [
 		["height", "%s m" % _n(height, 1)],
 		["landform", "%.2f  %s" % [landform, "lowland" if landform < 0.2 else ("mountain range" if landform > 0.8 else "foothills")]],
-		["temperature", "%.3f" % s.temperature],
-		["moisture", "%.3f" % s.moisture],
+		["temperature", _temperature(float(s.temperature), up, terrain)],
+		["moisture", "%d %%  (%.2f; deserts under 20 %%, rainforest over 70 %%)" % [roundi(100.0 * s.moisture), s.moisture]],
 		["ridge / erosion", "%.2f / %.2f" % [s.ridge, s.erosion]],
 		["biome", _name(BIOMES, int(s.biome_id))],
 		["material", _name(MATERIALS, int(s.get("material", -1)))],
@@ -169,11 +169,25 @@ static func _voxel_data(terrain: VoxelLodTerrain, p: Vector3, up: Vector3) -> Di
 		out.temperature = ((sd >> 24) & 0xff) / 255.0
 		out.moisture = ((sd >> 16) & 0xff) / 255.0
 		rows.append(["surface data", "erosion %.2f  ridge %.2f" % [(sd & 0xff) / 255.0, ((sd >> 8) & 0xff) / 255.0 * 2.0 - 1.0]])
-		rows.append(["", "moisture %.3f  temperature %.3f" % [out.moisture, out.temperature]])
+		rows.append(["", "moisture %d %%  temperature %.1f °C (annual mean)" % [roundi(out.moisture * 100.0), EdenCalendar.celsius(out.temperature)]])
 	else:
 		rows.append(["surface data", "none (terrain format has no 32-bit DATA6)"])
 	out.rows = rows
 	return out
+
+
+# The climate's annual mean in °C, and today's (the season, when the scene has an EdenCalendar)
+static func _temperature(t: float, up: Vector3, terrain: Node) -> String:
+	var text := "%.1f °C annual mean  (%.3f)" % [EdenCalendar.celsius(t), t]
+	var root := terrain.get_tree().edited_scene_root if terrain.get_tree() and Engine.is_editor_hint() else terrain.get_tree().current_scene
+	var cal: EdenCalendar = null
+	for n in root.find_children("*", "Node", true, false) if root else []:
+		if n is EdenCalendar:
+			cal = n
+			break
+	if cal:
+		text += ";  now %.1f °C (%s, %s)" % [EdenCalendar.celsius(t + cal.season_offset(up)), cal.season_at(up), cal.date_string()]
+	return text
 
 
 static func _mesh_lod(terrain: VoxelLodTerrain, p: Vector3) -> String:
@@ -213,15 +227,15 @@ static func _foliage(config: Resource, climate: Dictionary, slope: float, mat_id
 		if no:
 			rows.append(["", "not: " + ", ".join(no)])
 	if rows.is_empty():
-		rows.append(["", "no biome matches (temp %.2f, moist %.2f, slope %.0f°)" % [t, m, slope]])
+		rows.append(["", "no biome matches (%.0f °C, moisture %d %%, slope %.0f°)" % [EdenCalendar.celsius(t), roundi(m * 100.0), slope]])
 	return rows
 
 
 static func _reject(r: Resource, t: float, m: float, slope: float, mat_ids: Array) -> String:
 	if t < r.temperature.x or t > r.temperature.y:
-		return "temp %.2f-%.2f" % [r.temperature.x, r.temperature.y]
+		return "needs %.0f to %.0f °C" % [EdenCalendar.celsius(r.temperature.x), EdenCalendar.celsius(r.temperature.y)]
 	if m < r.moisture.x or m > r.moisture.y:
-		return "moist %.2f-%.2f" % [r.moisture.x, r.moisture.y]
+		return "needs moisture %d-%d %%" % [roundi(r.moisture.x * 100.0), roundi(r.moisture.y * 100.0)]
 	if slope < r.slope.x or slope > r.slope.y:
 		return "slope %.0f-%.0f°" % [r.slope.x, r.slope.y]
 	if r.materials != 0:
