@@ -39,7 +39,9 @@ public:
 	static Dictionary rock(const Ref<EdenFoliageLayer> &p_layer, int p_variant);
 	static Ref<ArrayMesh> wood(bool p_is_log, int p_variant);
 	// Grass tuft: `blades` flat triangles, UV.y 0 at the base .. 1 at the tip
-	static Ref<ArrayMesh> tuft(int p_blades, const Ref<Material> &p_material);
+	// A grass tuft. p_of > p_blades: the lighter LOD of the p_of-blade tuft, made of a subset of its very blades (the
+	// same angles and lengths), so switching a chunk's grass LOD drops blades instead of rearranging every tuft
+	static Ref<ArrayMesh> tuft(int p_blades, const Ref<Material> &p_material, int p_of = 0);
 	// One surface from [[Mesh, Color], ...]
 	static Ref<ArrayMesh> merge(const Array &p_parts, bool p_wind);
 

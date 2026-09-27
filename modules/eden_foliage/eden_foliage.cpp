@@ -637,7 +637,8 @@ void EdenFoliage::_add_detail_lods(const Ref<Resource> &p_item, const Ref<EdenFo
 	const float margin = int(terrain->get("mesh_block_size")) * (1 << lod) * 0.45f;
 	const float r = _lod_range(lod);
 	const float mid = detail_distance * mid_detail_scale;
-	p_item->call("set_mesh", EdenFoliageMeshes::build_simplified(p_layer, p_variant, 0.2f), 1);
+	// (half the triangles: at a fifth, crowns visibly lost chunks as a whole chunk of them switched at once)
+	p_item->call("set_mesh", EdenFoliageMeshes::build_simplified(p_layer, p_variant, 0.5f), 1);
 	PackedFloat32Array ratios;
 	ratios.push_back((detail_distance + margin) / r);
 	if (mid < p_end) {
@@ -707,7 +708,7 @@ Ref<Resource> EdenFoliage::_grass_item(const String &p_name, const Ref<Resource>
 	if (terrain != nullptr && grass_lod_distance > 0.0f && grass_lod_distance < grass_fade_end && far_blades_per_tuft < blades_per_tuft) {
 		const float margin = int(terrain->get("mesh_block_size")) * 0.87f;
 		const float r = _lod_range(0);
-		item->call("set_mesh", EdenFoliageMeshes::tuft(far_blades_per_tuft, mat), 1);
+		item->call("set_mesh", EdenFoliageMeshes::tuft(far_blades_per_tuft, mat, blades_per_tuft), 1);
 		PackedFloat32Array ratios;
 		ratios.push_back((grass_lod_distance + margin) / r);
 		ratios.push_back(MIN((grass_fade_end + margin) / r, 2.0f));

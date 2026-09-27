@@ -9,6 +9,7 @@
 
 #include "core/math/random_number_generator.h"
 #include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
 #include "modules/noise/fastnoise_lite.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/resources/3d/capsule_shape_3d.h"
@@ -512,13 +513,19 @@ Ref<ArrayMesh> EdenFoliageMeshes::wood(bool p_is_log, int p_variant) {
 	return merge(eden_array(eden_array(m.build_mesh(), bark)), false);
 }
 
-Ref<ArrayMesh> EdenFoliageMeshes::tuft(int p_blades, const Ref<Material> &p_material) {
+Ref<ArrayMesh> EdenFoliageMeshes::tuft(int p_blades, const Ref<Material> &p_material, int p_of) {
 	Ref<RandomNumberGenerator> rng = make_rng(7); // every tuft is the same mesh; variety comes from instance scale/rotation
 	Ref<SurfaceTool> st;
 	st.instantiate();
 	st->begin(Mesh::PRIMITIVE_TRIANGLES);
-	for (int i = 0; i < p_blades; i++) {
-		const float yaw = Math::TAU * (float(i) + rng->randf() * 0.5f) / float(p_blades);
+	const int layout = MAX(p_of, p_blades);
+	// Which of the layout's blades are drawn: spread evenly round the tuft
+	HashSet<int> keep;
+	for (int k = 0; k < p_blades; k++) {
+		keep.insert(k * layout / p_blades);
+	}
+	for (int i = 0; i < layout; i++) {
+		const float yaw = Math::TAU * (float(i) + rng->randf() * 0.5f) / float(layout);
 		const Vector3 dir(Math::cos(yaw), 0.0f, Math::sin(yaw));
 		const Vector3 side(-dir.z, 0.0f, dir.x);
 		const Vector3 root = dir * rng->randf_range(0.0f, 0.15f);
@@ -526,6 +533,9 @@ Ref<ArrayMesh> EdenFoliageMeshes::tuft(int p_blades, const Ref<Material> &p_mate
 		const float out = rng->randf_range(0.08f, 0.2f);
 		const float up = rng->randf_range(0.35f, 0.65f);
 		const Vector3 tip = root + dir * out + Vector3(0, 1, 0) * up;
+		if (!keep.has(i)) {
+			continue; // (after drawing its random numbers, so the kept blades match the full tuft's)
+		}
 		st->set_uv(Vector2(0, 0));
 		st->add_vertex(root - side * half_w);
 		st->set_uv(Vector2(1, 0));
@@ -831,7 +841,7 @@ void EdenFoliageMeshes::_bind_methods() {
 	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("bush", "bush_type", "season", "variant"), &EdenFoliageMeshes::bush);
 	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("rock", "layer", "variant"), &EdenFoliageMeshes::rock);
 	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("wood", "is_log", "variant"), &EdenFoliageMeshes::wood);
-	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("tuft", "blades", "material"), &EdenFoliageMeshes::tuft);
+	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("tuft", "blades", "material", "of"), &EdenFoliageMeshes::tuft, DEFVAL(0));
 	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("merge", "parts", "wind"), &EdenFoliageMeshes::merge);
 	ClassDB::bind_static_method("EdenFoliageMeshes", D_METHOD("clear_cache"), &EdenFoliageMeshes::clear_cache);
 }
