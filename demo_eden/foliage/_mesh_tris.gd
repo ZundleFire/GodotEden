@@ -17,7 +17,7 @@ func _initialize() -> void:
 	var seen := {}
 	for b in cfg.biomes:
 		for l in b.layers:
-			var kind: String = EdenFoliageLayer.Kind.keys()[l.kind]
+			var kind: String = EdenFoliageLayer.kind_name(l.kind)
 			if seen.has(kind) or l.is_grass():
 				continue
 			seen[kind] = true

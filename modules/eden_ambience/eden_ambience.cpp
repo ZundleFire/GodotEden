@@ -598,8 +598,27 @@ void EdenAmbience::_apply_look() {
 	if (Math::abs(env->get_ambient_light_sky_contribution() - ambient_strength) > 1e-3f) {
 		env->set_ambient_light_sky_contribution(ambient_strength);
 	}
-	// Overcast skies are darker and greyer; lightning flashes the whole frame
+	// Night light: the dark sky itself lights nothing, so starlight (always) and moonlight (by the moon's phase
+	// and height) fill the ambient's colour half instead -- enough to make out the ground -- dimmed by cloud
 	const float overcast = weather_enabled ? local.cloud : 0.0f;
+	{
+		float moon = 0.0f;
+		Vector3 cam;
+		Node *atmo = _get_atmosphere();
+		if (atmo != nullptr && state.valid && _get_camera(cam)) {
+			const Vector3 up = (cam - state.center).normalized();
+			const Vector3 md = atmo->get("moon_direction");
+			const float illum = atmo->call("get_moon_illumination");
+			const float opacity = atmo->get("moon_opacity"); // 0 = no moon (SkySystem hides absent moons)
+			moon = Math::pow(CLAMP(illum, 0.0f, 1.0f), 1.5f) * _smoothstep(-0.05f, 0.2f, md.normalized().dot(up)) * CLAMP(opacity, 0.0f, 1.0f);
+		}
+		const float night_energy = state.night * (starlight + moonlight * moon) * (1.0f - 0.85f * overcast);
+		if (Math::abs(env->get_ambient_light_energy() - night_energy) > 1e-3f || env->get_ambient_light_color() != night_ambient_color) {
+			env->set_ambient_light_color(night_ambient_color);
+			env->set_ambient_light_energy(night_energy);
+		}
+	}
+	// Overcast skies are darker and greyer; lightning flashes the whole frame
 	const float exp_now = exposure * (1.0f - storm_exposure_drop * overcast) * (1.0f + lightning_brightness * flash);
 	const float sat_now = saturation * (1.0f - storm_desaturation * overcast);
 	if (Math::abs(exp_now - applied_exposure) > 1e-3f || Math::abs(sat_now - applied_saturation) > 1e-3f) {
@@ -624,7 +643,7 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 		wp.seed = weather_seed;
 		weather.natural = -1; // reseed
 	}
-	wp.cell_count = storm_count;
+	wp.cell_count = weather_external ? 0 : storm_count;
 	wp.wind_speed = storm_speed;
 	wp.min_radius = storm_min_radius;
 	wp.max_radius = MAX(storm_max_radius, storm_min_radius);
@@ -711,12 +730,16 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 	}
 
 	local = weather.sample(up);
+	if (weather_external) {
+		// The zone's cloud cover as asked (a lone cell's own cloud falls short of it)
+		local.cloud = MAX(local.cloud, ext_cloud_now);
+	}
 	local_snow = weather.snow_at(up);
 	local_wet = weather.wetness_at(up);
 	const float t = state.temperature - 0.04f + 0.08f * MAX(p_sun.dot(up), 0.0f);
 	local_freezing = 1.0f - _smoothstep(freeze_temperature - 0.03f, freeze_temperature + 0.03f, t);
 	// Forced snow freezes, forced rain thaws, around the camera
-	if (ov_mode == WEATHER_SNOW) {
+	if (ov_mode == WEATHER_SNOW || (weather_external && ext_snow)) {
 		local_freezing = Math::lerp(local_freezing, 1.0f, ov_strength);
 	} else if (ov_mode == WEATHER_RAIN || ov_mode == WEATHER_THUNDERSTORM) {
 		local_freezing = Math::lerp(local_freezing, 0.0f, ov_strength);
@@ -750,6 +773,36 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 // weather_override: a storm (or a clear zone) that follows the camera. Switching fades the old one out
 // before the new one fades in over override_fade.
 void EdenAmbience::_update_override(float p_delta, const Vector3 &p_up) {
+	if (weather_external) {
+		// The game's weather: one storm cell (or a clear zone) riding with the camera. Strength follows the cloud
+		// cover, the cell's intensity the precipitation; both ease toward their targets.
+		// Linear, so a change is complete (to exactly 0 when the rain stops) after override_fade
+		const float k = p_delta / MAX(override_fade, 0.01f);
+		const bool any = ext_intensity > 0.0f || ext_cloud > 0.0f;
+		const float strength = any ? MAX(ext_cloud, ext_intensity > 0.0f ? 1.0f : 0.0f) : 1.0f;
+		ov_strength = Math::move_toward(ov_strength, strength, k);
+		ext_intensity_now = Math::move_toward(ext_intensity_now, ext_intensity, k);
+		ext_fog_now = Math::move_toward(ext_fog_now, ext_fog, k);
+		ext_cloud_now = Math::move_toward(ext_cloud_now, ext_cloud, k);
+		ov_mode = WEATHER_AUTO;
+		EdenWeatherSim::Override &o = weather.override_zone;
+		o.dir = p_up;
+		o.radius = override_radius / MAX(state.planet_radius, 1.0f);
+		o.strength = ov_strength;
+		o.mode = any ? EdenWeatherSim::Override::STORM : EdenWeatherSim::Override::CLEAR;
+		o.temperature = ext_intensity > 0.0f && ext_snow ? -1 : 0; // else the climate decides rain or snow
+		EdenWeatherSim::Cell &c = o.cell;
+		c.dir = p_up;
+		c.radius = o.radius;
+		c.life = 1e9f;
+		c.age = 0.5e9f;
+		c.drift = 0.0f;
+		c.dust = false;
+		c.thunder = ext_thunder;
+		c.intensity = ext_intensity_now;
+		return;
+	}
+	ext_fog_now = 0.0f;
 	const int target = CLAMP(weather_override, 0, WEATHER_MAX - 1);
 	if (target != ov_mode) {
 		ov_strength -= p_delta / 0.75f;
@@ -801,6 +854,14 @@ void EdenAmbience::_update_override(float p_delta, const Vector3 &p_up) {
 			o.mode = EdenWeatherSim::Override::NONE;
 			break;
 	}
+}
+
+void EdenAmbience::set_external_weather(float p_intensity, float p_cloud, bool p_snow, bool p_thunder, float p_fog) {
+	ext_intensity = CLAMP(p_intensity, 0.0f, 1.0f);
+	ext_cloud = CLAMP(p_cloud, 0.0f, 1.0f);
+	ext_snow = p_snow;
+	ext_thunder = p_thunder;
+	ext_fog = CLAMP(p_fog, 0.0f, 1.0f);
 }
 
 String EdenAmbience::get_weather_name() const {
@@ -1081,7 +1142,16 @@ void EdenAmbience::_update(double p_delta) {
 	if (on && particles_enabled) {
 		ratio[FX_MOTES] = motes_amount * state.day * near_ground * (land || m_ice > 0.0f ? 1.0f : 0.0f) * (1.0f - local.cloud) * (1.0f - dust_storm) *
 				(biomes ? 1.0f : 1.0f - cold);
-		ratio[FX_FIREFLIES] = fireflies_amount * state.night * warm * vegetation * near_ground * (1.0f - precip);
+		// Fireflies are a summer thing: in this hemisphere's summer where seasons are felt, all year in the tropics
+		float summer = 1.0f;
+		if (year_phase >= 0.0f) {
+			const float sl = up.dot(weather.params.spin_axis);
+			const float w = Math::fposmod(year_phase + (sl < 0.0f ? 0.5f : 0.0f), 1.0f); // 0 = local spring equinox
+			const float felt = _smoothstep(0.05f, 0.5f, Math::abs(sl));
+			const float in_summer = _smoothstep(0.17f, 0.25f, w) * (1.0f - _smoothstep(0.47f, 0.55f, w));
+			summer = Math::lerp(1.0f, in_summer, felt);
+		}
+		ratio[FX_FIREFLIES] = fireflies_amount * summer * state.night * warm * vegetation * near_ground * (1.0f - precip);
 		ratio[FX_SNOW] = snow_amount * (precip * local_freezing + 0.25f * cold * local.cloud) * (1.0f - _smoothstep(800.0f, 3000.0f, state.altitude));
 		ratio[FX_RAIN] = rain_amount * (1.0f - cold) + precip * (1.0f - local_freezing);
 		if (biomes) {
@@ -1124,16 +1194,19 @@ void EdenAmbience::_update(double p_delta) {
 			fog_atmo = atmo->get_instance_id();
 			fog_saved = Vector3(atmo->get("fog_density"), atmo->get("fog_height_falloff"), atmo->get("fog_base_altitude"));
 			sun_energy_saved = atmo->get("sun_light_energy");
+			moon_energy_saved = atmo->get("moon_light_energy");
 			fog_albedo_saved = atmo->get("fog_albedo");
 			fog_sun_saved = atmo->get("fog_sun_intensity");
 		}
 		// Storm cover dims the direct sun (the sky and ambient already darken through the grade)
 		_atmo_set(atmo, "sun_light_energy", sun_energy_saved * (1.0f - storm_sun_dimming * (weather_enabled ? MAX(local.cloud, dust_storm) : 0.0f)));
+		// Cloud hides the moon too (more than the sun: moonlight has no diffuse sky glow to carry it through)
+		_atmo_set(atmo, "moon_light_energy", moon_energy_saved * (1.0f - 0.9f * (weather_enabled ? MAX(local.cloud, dust_storm) : 0.0f)));
 	}
 	if (drive_atmo && fog_enabled) {
 		const float humid = _smoothstep(0.3f, 0.8f, state.moisture) * (1.0f - cold * 0.5f);
 		const float low_sun = 1.0f - _smoothstep(0.05f, 0.4f, state.sun_elevation);
-		const float target = MAX(humid * (0.15f + 0.85f * low_sun), MAX(rain_amount * 0.6f, MAX(precip * storm_fog + local.cloud * 0.15f, dust_storm * dust_fog)));
+		const float target = MAX(MAX(humid * (0.15f + 0.85f * low_sun), ext_fog_now * 2.5f), MAX(rain_amount * 0.6f, MAX(precip * storm_fog + local.cloud * 0.15f, dust_storm * dust_fog)));
 		const float k = mist < 0.0f ? 1.0f : 1.0f - Math::exp(-(float)p_delta / 4.0f);
 		mist = mist < 0.0f ? target : Math::lerp(mist, target, k);
 		mist_ground = Math::lerp(mist_ground, MAX(state.ground_height, 0.0f), k);
@@ -1300,6 +1373,7 @@ void EdenAmbience::_restore_fog() {
 		_atmo_set(atmo, "fog_height_falloff", fog_saved.y);
 		_atmo_set(atmo, "fog_base_altitude", fog_saved.z);
 		_atmo_set(atmo, "sun_light_energy", sun_energy_saved);
+		_atmo_set(atmo, "moon_light_energy", moon_energy_saved);
 		_atmo_set(atmo, "fog_albedo", fog_albedo_saved);
 		_atmo_set(atmo, "fog_sun_intensity", fog_sun_saved);
 	}
@@ -1473,6 +1547,7 @@ void EdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_snow_and_wetness"), &EdenAmbience::clear_snow_and_wetness);
 	ClassDB::bind_method(D_METHOD("strike_lightning", "world_position", "cloud_only"), &EdenAmbience::strike_lightning, DEFVAL(Vector3()), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("cycle_weather", "step"), &EdenAmbience::cycle_weather, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("set_external_weather", "intensity", "cloud", "snow", "thunder", "fog"), &EdenAmbience::set_external_weather);
 	ClassDB::bind_method(D_METHOD("get_weather_name"), &EdenAmbience::get_weather_name);
 	ClassDB::bind_method(D_METHOD("get_weather_texture"), &EdenAmbience::get_weather_texture);
 

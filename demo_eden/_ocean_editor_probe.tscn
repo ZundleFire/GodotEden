@@ -3,7 +3,6 @@
 [ext_resource type="Script" uid="uid://cq17jbsvkbhfl" path="res://_ocean_editor_probe.gd" id="1"]
 [ext_resource type="Shader" uid="uid://dfgwdf5l86w3o" path="res://shaders/EdenPlanet_LowPolyClimate.gdshader" id="2_g7vpv"]
 [ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
-[ext_resource type="Script" uid="uid://bj22rajkkuab1" path="res://eden_foliage.gd" id="eden_foliage_gd"]
 [ext_resource type="Resource" uid="uid://p5u8mxk0bux2" path="res://foliage/eden_foliage_default.tres" id="foliage_config"]
 [ext_resource type="PackedScene" path="res://Character/eden_player.tscn" id="eden_player"]
 [ext_resource type="Script" path="res://settings/eden_graphics.gd" id="eden_graphics"]
@@ -1326,9 +1325,8 @@ far_enabled = true
 far_planet_radius = 40000.0
 mesh_block_size = 32
 
-[node name="EdenFoliage" type="VoxelInstancer" parent="VoxelLodTerrain" unique_id=1086148909]
+[node name="EdenFoliage" type="EdenFoliage" parent="VoxelLodTerrain" unique_id=1086148909]
 up_mode = 1
-script = ExtResource("eden_foliage_gd")
 config = ExtResource("foliage_config")
 grass_fade_end = 100.0
 grass_wind_fade_start = 10.0

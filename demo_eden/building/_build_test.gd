@@ -216,7 +216,7 @@ func _nearest_tree() -> Node3D:
 
 func _kind_name(b: Node) -> String:
 	var kind = miner._foliage.item_kinds.get(b.get_library_item_id())
-	return EdenFoliageLayer.Kind.keys()[kind] if kind != null else ""
+	return EdenFoliageLayer.kind_name(kind) if kind != null else ""
 
 
 func _finish() -> bool:

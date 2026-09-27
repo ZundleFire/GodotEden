@@ -79,7 +79,7 @@ func _next_case() -> void:
 		var cfg: EdenFoliageConfig = _original.duplicate(true)
 		for b in cfg.biomes:
 			for l in b.layers:
-				l.enabled = not (EdenFoliageLayer.Kind.keys()[l.kind] in values.kinds)
+				l.enabled = not (EdenFoliageLayer.kind_name(l.kind) in values.kinds)
 		foliage.config = cfg
 	elif not values.is_empty():
 		foliage.config = _original

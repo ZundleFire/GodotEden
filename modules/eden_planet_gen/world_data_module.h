@@ -4,8 +4,7 @@
 #include "core/object/class_db.h"
 #include "core/object/ref_counted.h"
 #include "core/os/mutex.h"
-
-class EdenPlanetGeneratorV1;
+#include "modules/voxel/generators/voxel_generator.h"
 
 // ADR-0005: World Data Storage and Runtime Query.
 // SurfaceData / WorldConstants are the GDScript-visible result types;
@@ -70,8 +69,8 @@ protected:
 
 // Engine singleton owning runtime world-data queries and .ewd persistence.
 // Not a scene node — registered via Engine::add_singleton in register_types.cpp.
-// The active EdenPlanetGeneratorV1 auto-wires itself here from setup(); tests and
-// tools may inject one explicitly with set_generator().
+// Answers from an EdenPlanetGeneratorV1 or EdenPlanetGeneratorV4. V1 auto-wires itself here from setup(); V4 has no
+// setup step, so the game passes it with set_generator() (WorldBootstrap does). Tests and tools may inject either.
 //
 // Thread safety: all public methods lock an internal mutex around shared state;
 // terrain sampling itself uses the generator's own RWLock (shared with worker
@@ -85,10 +84,14 @@ public:
 	WorldDataModule();
 	~WorldDataModule();
 
-	// The generator used to answer surface queries. Auto-set by
-	// EdenPlanetGeneratorV1::setup(); last setup() wins.
-	void set_generator(const Ref<EdenPlanetGeneratorV1> &p_generator);
-	Ref<EdenPlanetGeneratorV1> get_generator() const;
+	// The generator used to answer surface queries: EdenPlanetGeneratorV1 (auto-set by its setup(); last setup()
+	// wins) or EdenPlanetGeneratorV4 (set explicitly). Any other generator is rejected with an error.
+	void set_generator(const Ref<zylann::voxel::VoxelGenerator> &p_generator);
+	Ref<zylann::voxel::VoxelGenerator> get_generator() const;
+
+	// Radius of the wired generator's planet (sea level for V1; the base radius heights are measured from for V4),
+	// or the radius given to load_world() when no generator is wired. Example: module.get_planet_radius()
+	float get_planet_radius() const;
 
 	// ADR-0001: planet center must come from the registered GravityBody3D —
 	// game code sets this at world load. Defaults to origin.
@@ -140,8 +143,21 @@ private:
 
 	String _ewd_path(const String &p_world_id) const;
 
+	// One surface sample, whichever generator answers it
+	struct Sample {
+		float height = 0.0f; // relative to the planet radius
+		float temperature = 0.0f; // 0..1
+		float rainfall = 0.0f; // 0..1
+		float water_depth = 0.0f;
+		bool is_ocean = true;
+		int biome_type = 10; // ADR BiomeType
+	};
+	// False if the generator cannot answer (V1 before setup(), or not a supported generator)
+	static bool _sample(const Ref<zylann::voxel::VoxelGenerator> &p_gen, const Vector3 &p_dir, Sample &r_sample);
+	static float _generator_radius(const Ref<zylann::voxel::VoxelGenerator> &p_gen);
+
 	mutable Mutex _mutex;
-	Ref<EdenPlanetGeneratorV1> _generator;
+	Ref<zylann::voxel::VoxelGenerator> _generator;
 	Vector3 _planet_center;
 	float _planet_radius = 0.0f;
 	String _worlds_dir = "user://worlds";

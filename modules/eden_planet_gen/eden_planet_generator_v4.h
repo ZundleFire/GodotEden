@@ -120,6 +120,8 @@ public:
 	Dictionary sample_surface(Vector3 direction) const;
 
 	Parameters get_parameters() const;
+	float get_planet_radius() const { return get_parameters().planet_radius; }
+	float get_sea_level() const { return get_parameters().sea_level; }
 
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
