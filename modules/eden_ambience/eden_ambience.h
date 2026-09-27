@@ -225,6 +225,21 @@ private:
 	// Weather
 	EdenWeatherSim weather;
 	Ref<ImageTexture> weather_texture;
+	// Snow trail: where feet pressed the lying snow down (0..1), a TRAIL_RES^2 map over TRAIL_SIZE metres of the local
+	// tangent plane, following the camera (resampled when it recentres) and refilled by falling snow.
+	static constexpr int TRAIL_RES = 256;
+	static constexpr float TRAIL_SIZE = 64.0f;
+	static constexpr float TRAIL_PRESS = 0.8f; // how much of the snow's depth a full trail presses down
+	LocalVector<float> trail;
+	Vector3 trail_center, trail_u, trail_v; // world centre and tangent axes (unit)
+	bool trail_active = false, trail_dirty = false;
+	float trail_upload_timer = 0.0f;
+	Ref<Image> trail_image;
+	Ref<ImageTexture> trail_texture;
+	void _trail_frame(const Vector3 &p_center);
+	void _trail_recentre(const Vector3 &p_center);
+	float _trail_sample(const Vector3 &p_world) const;
+	void _update_trail(float p_delta);
 	float weather_timer = 0.0f;
 	float weather_accum = 0.0f; // weather-seconds since the last map update
 	bool weather_started = false;
@@ -380,6 +395,12 @@ public:
 	void set_external_weather(float p_intensity, float p_cloud, bool p_snow, bool p_thunder, float p_fog);
 	String get_weather_name() const;
 	Ref<ImageTexture> get_weather_texture() const;
+	// Lying snow depth (m) at a world position, less what feet have pressed down there
+	float get_snow_depth_at(const Vector3 &p_world_position) const;
+	// How far the snow at a world position has been pressed down, 0..1
+	float get_snow_trail_at(const Vector3 &p_world_position) const { return _trail_sample(p_world_position); }
+	// Feet (or anything) pressing the snow down in a disc: amount 0..1 at the centre, fading to the rim
+	void press_snow(const Vector3 &p_world_position, float p_radius, float p_amount);
 
 	EdenAmbience();
 };

@@ -45,6 +45,22 @@ eden_weather_snow={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+eden_snow_trail_map={
+"type": "sampler2D",
+"value": ""
+}
+eden_snow_trail_frame={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_snow_trail_u={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+eden_snow_trail_v={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
 eden_wind={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)

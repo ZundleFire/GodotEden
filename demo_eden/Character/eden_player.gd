@@ -95,6 +95,13 @@ var _model: Node3D
 var _model_rest: Transform3D
 var _lean_accel := Vector3.ZERO
 var _prev_horizontal := Vector3.ZERO
+## The velocity the player means to have (input and acceleration only, never collisions or slopes): what the body
+## leans into, so steps and slopes that bend the real velocity don't tip the whole model
+var _intent := Vector3.ZERO
+## Between the spring arm and the camera: lifts the camera clear of lying snow (the arm only sees solid ground)
+var _cam_lift: Node3D
+var _snow_lift := 0.0
+var _last_press: Variant = null
 var _steps: AudioStreamEdenAmbience
 var _steps_player: AudioStreamPlayer
 var _pivot: Node3D
@@ -153,7 +160,9 @@ func _ready() -> void:
 	_camera = Camera3D.new()
 	_camera.far = 400000.0
 	_camera.near = 0.1
-	_arm.add_child(_camera)
+	_cam_lift = Node3D.new()
+	_arm.add_child(_cam_lift)
+	_cam_lift.add_child(_camera)
 	_camera.current = true
 	# Footsteps: the ambience synth with its beds silent, used only for its one-shot steps
 	_steps = AudioStreamEdenAmbience.new()
@@ -415,6 +424,7 @@ func _physics_process(delta: float) -> void:
 	_set_crouching(Input.is_action_pressed("crouch") and grounded)
 	running = Input.is_action_pressed("sprint") and not crouching and input.length() > 0.1
 	var speed := crouch_speed if crouching else (run_speed if running else walk_speed)
+	speed *= _snow_slowdown(global_position + wish * 0.4)
 
 	var vertical := velocity.dot(up)
 	var horizontal := velocity - up * vertical
@@ -435,6 +445,7 @@ func _physics_process(delta: float) -> void:
 		return
 	var rate := (acceleration if grounded else air_control) * maxf(speed, 1.0) * delta
 	horizontal = horizontal.move_toward(wish * speed, rate)
+	_intent = (_intent - up * _intent.dot(up)).move_toward(wish * speed, rate)
 	if on_floor:
 		vertical = minf(vertical, 0.0)
 	else:
@@ -482,6 +493,8 @@ func _physics_process(delta: float) -> void:
 		_on_step(0, clampf(fall_speed / 6.0, 0.4, 1.3))
 	_was_on_floor = is_on_floor()
 	_update_animation(horizontal, delta)
+	# Walking through lying snow presses a path into it
+	_last_press = press_snow_stroke(_ambience, _last_press, global_position, _air_time < 0.3)
 
 
 ## How far below the sea surface the feet are (negative above it)
@@ -592,8 +605,8 @@ func _update_animation(horizontal: Vector3, delta: float) -> void:
 
 	# Lean into acceleration (starting, stopping, turning): tilt the model about its feet, toward the (smoothed)
 	# change of ground velocity, as a body keeps its balance
-	var accel := (horizontal - _prev_horizontal) / maxf(delta, 1e-4)
-	_prev_horizontal = horizontal
+	var accel := (_intent - _prev_horizontal) / maxf(delta, 1e-4)
+	_prev_horizontal = _intent
 	if animator.airborne:
 		accel = Vector3.ZERO
 	_lean_accel = _lean_accel.lerp(accel, 1.0 - exp(-delta * 6.0))
@@ -636,6 +649,7 @@ func _process(_delta: float) -> void:
 	_pivot.global_transform = Transform3D(Basis.looking_at(heading, up) * Basis(Vector3.RIGHT, _pitch),
 			global_position + up * _cam_height + heading.cross(up) * camera_shoulder)
 	_arm.spring_length = camera_distance
+	_keep_camera_above_snow(up, _delta)
 	if _hud and _hud.visible:
 		var status := "" if ready_to_move else "\nWaiting for terrain collision under the player..."
 		var mine := "\nHold LMB dig / chop trees, RMB place, 1-6 / wheel select, Tab inventory   G hammer (build)" if miner else ""
@@ -643,3 +657,40 @@ func _process(_delta: float) -> void:
 			mine += "\nMultiplayer: %s, %d online" % [net.status, net.online_count()]
 		_hud.text = "%s\nWASD move, Shift run, Ctrl/C crouch, Space jump, mouse look (click)   N / B weather, L lightning, K calendar   Esc settings   F1 hide%s%s" % [
 				readings(), mine, status]
+
+
+## Speed multiplier in lying snow at a spot: wading through its full depth (0.35 m) takes nearly half the speed
+func _snow_slowdown(at: Vector3) -> float:
+	if not _ambience:
+		return 1.0
+	var depth: float = _ambience.call("get_snow_depth_at", at)
+	return 1.0 - 0.55 * clampf(depth / 0.35, 0.0, 1.0)
+
+
+## The spring arm stops at solid ground, but lying snow is drawn above it: raise the camera (eased) to stay over
+## the snow's surface where it sits
+func _keep_camera_above_snow(up: Vector3, delta: float) -> void:
+	var need := 0.0
+	if _ambience:
+		var cam := _cam_lift.global_position   # where the arm put the camera, before the lift
+		var q := PhysicsRayQueryParameters3D.create(cam + up * 2.0, cam - up * 3.0, 1, [get_rid()])
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			var snow: float = _ambience.call("get_snow_depth_at", hit.position)
+			need = maxf(0.0, (snow + 0.3) - (cam - hit.position).dot(up))
+	_snow_lift = lerpf(_snow_lift, need, 1.0 - exp(-delta * 10.0))
+	_camera.position = _cam_lift.global_basis.inverse() * (up * _snow_lift)
+
+
+## Presses a path into lying snow from where the last press was to `at`: a continuous stroke, so no gaps open at speed
+## or over a bump (`grounded` false, e.g. mid-jump, lifts the pen)
+static func press_snow_stroke(ambience: Node, last: Variant, at: Vector3, grounded: bool) -> Variant:
+	if ambience == null or not grounded or float(ambience.get_snow_depth_at(at)) <= 0.005:
+		return at if grounded else null
+	var from: Vector3 = last if last is Vector3 and (last as Vector3).distance_to(at) < 3.0 else at
+	var n := ceili(from.distance_to(at) / 0.15)
+	for i in range(1, n + 1):
+		ambience.press_snow(from.lerp(at, float(i) / n), 0.4, 1.0)
+	if n == 0:
+		ambience.press_snow(at, 0.4, 1.0)
+	return at

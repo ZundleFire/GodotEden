@@ -1083,6 +1083,7 @@ void EdenAmbience::_update(double p_delta) {
 		sun_dir = atmo->call("get_sun_direction");
 	}
 	_update_weather(p_delta, cam, sun_dir);
+	_update_trail((float)p_delta);
 	_update_bolts(p_delta, cam);
 	_apply_look();
 
@@ -1313,11 +1314,12 @@ void EdenAmbience::_notification(int p_what) {
 			// editor can compile shaders that use them, otherwise they are created here at runtime
 			RenderingServer *rs = RenderingServer::get_singleton();
 			const char *names[] = { "eden_weather_map", "eden_weather_planet", "eden_weather_params", "eden_weather_snow", "eden_wind", "eden_wind_flow",
-				"eden_calendar", "eden_calendar_axis" };
+				"eden_calendar", "eden_calendar_axis", "eden_snow_trail_map", "eden_snow_trail_frame", "eden_snow_trail_u", "eden_snow_trail_v" };
 			const RS::GlobalShaderParameterType types[] = { RS::GLOBAL_VAR_TYPE_SAMPLER2D, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4,
-				RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4 };
-			const Variant values[] = { RID(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4() };
-			for (int i = 0; i < 8; i++) {
+				RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4,
+				RS::GLOBAL_VAR_TYPE_SAMPLER2D, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4, RS::GLOBAL_VAR_TYPE_VEC4 };
+			const Variant values[] = { RID(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), Vector4(), RID(), Vector4(), Vector4(), Vector4() };
+			for (int i = 0; i < 12; i++) {
 				if (!globals_added && !ProjectSettings::get_singleton()->has_setting(String("shader_globals/") + names[i])) {
 					rs->global_shader_parameter_add(names[i], types[i], values[i]);
 				}
@@ -1358,6 +1360,12 @@ void EdenAmbience::_notification(int p_what) {
 				calendar_pushed = Vector4(-9, -9, -9, -9); // set again next update
 				terrain_mat->set_shader_parameter("eden_weather_params", Variant());
 				terrain_mat->set_shader_parameter("eden_weather_snow", Variant());
+				terrain_mat->set_shader_parameter("eden_snow_trail_map", Variant());
+				terrain_mat->set_shader_parameter("eden_snow_trail_frame", Variant());
+				terrain_mat->set_shader_parameter("eden_snow_trail_u", Variant());
+				terrain_mat->set_shader_parameter("eden_snow_trail_v", Variant());
+				trail_texture.unref(); // (re-set on the material with the next upload)
+				trail_dirty = trail_active;
 				weather_timer = 0.0f;
 			}
 		} break;
@@ -1439,6 +1447,151 @@ Dictionary EdenAmbience::get_weather_at(const Vector3 &p_world_position) const {
 	return d;
 }
 
+// ===========================================================================================
+// Snow trail
+// ===========================================================================================
+
+float EdenAmbience::get_snow_depth_at(const Vector3 &p_world_position) const {
+	if (!weather_enabled || !state.valid) {
+		return 0.0f;
+	}
+	const float cover = weather.snow_at(p_world_position - state.center);
+	return cover * snow_max_depth * (1.0f - TRAIL_PRESS * _trail_sample(p_world_position));
+}
+
+// The tangent frame at a world point: axes kept stable by building them off the planet's Y (Z near the poles)
+void EdenAmbience::_trail_frame(const Vector3 &p_center) {
+	const Vector3 up = (p_center - state.center).normalized();
+	Vector3 ref = Math::abs(up.y) < 0.9f ? Vector3(0, 1, 0) : Vector3(0, 0, 1);
+	trail_u = ref.cross(up).normalized();
+	trail_v = up.cross(trail_u).normalized();
+	trail_center = p_center;
+}
+
+float EdenAmbience::_trail_sample(const Vector3 &p_world) const {
+	if (!trail_active) {
+		return 0.0f;
+	}
+	const Vector3 d = p_world - trail_center;
+	const float fx = (d.dot(trail_u) / TRAIL_SIZE + 0.5f) * TRAIL_RES - 0.5f;
+	const float fy = (d.dot(trail_v) / TRAIL_SIZE + 0.5f) * TRAIL_RES - 0.5f;
+	const int x0 = (int)Math::floor(fx), y0 = (int)Math::floor(fy);
+	if (x0 < 0 || y0 < 0 || x0 >= TRAIL_RES - 1 || y0 >= TRAIL_RES - 1) {
+		return 0.0f;
+	}
+	const float tx = fx - x0, ty = fy - y0;
+	const float *t = trail.ptr() + y0 * TRAIL_RES + x0;
+	return Math::lerp(Math::lerp(t[0], t[1], tx), Math::lerp(t[TRAIL_RES], t[TRAIL_RES + 1], tx), ty);
+}
+
+// Moves the map's centre, carrying the trail already there across (a path stays where it was walked)
+void EdenAmbience::_trail_recentre(const Vector3 &p_center) {
+	if (!trail_active) {
+		trail.resize(TRAIL_RES * TRAIL_RES);
+		for (float &v : trail) {
+			v = 0.0f;
+		}
+		_trail_frame(p_center);
+		trail_active = true;
+		trail_dirty = true;
+		return;
+	}
+	LocalVector<float> old = trail;
+	const Vector3 oc = trail_center, ou = trail_u, ov = trail_v;
+	_trail_frame(p_center);
+	for (int y = 0; y < TRAIL_RES; y++) {
+		for (int x = 0; x < TRAIL_RES; x++) {
+			const Vector3 w = trail_center + trail_u * (((x + 0.5f) / TRAIL_RES - 0.5f) * TRAIL_SIZE) +
+					trail_v * (((y + 0.5f) / TRAIL_RES - 0.5f) * TRAIL_SIZE);
+			const Vector3 d = w - oc;
+			const int ox = (int)Math::floor((d.dot(ou) / TRAIL_SIZE + 0.5f) * TRAIL_RES);
+			const int oy = (int)Math::floor((d.dot(ov) / TRAIL_SIZE + 0.5f) * TRAIL_RES);
+			trail[y * TRAIL_RES + x] = (ox >= 0 && oy >= 0 && ox < TRAIL_RES && oy < TRAIL_RES) ? old[oy * TRAIL_RES + ox] : 0.0f;
+		}
+	}
+	trail_dirty = true;
+}
+
+void EdenAmbience::press_snow(const Vector3 &p_world_position, float p_radius, float p_amount) {
+	if (!state.valid || p_radius <= 0.0f || p_amount <= 0.0f) {
+		return;
+	}
+	if (!trail_active || (p_world_position - trail_center).length() > TRAIL_SIZE * 0.25f) {
+		_trail_recentre(p_world_position);
+	}
+	const Vector3 d = p_world_position - trail_center;
+	const float texel = TRAIL_SIZE / TRAIL_RES;
+	const float cx = (d.dot(trail_u) / TRAIL_SIZE + 0.5f) * TRAIL_RES;
+	const float cy = (d.dot(trail_v) / TRAIL_SIZE + 0.5f) * TRAIL_RES;
+	const float r = p_radius / texel;
+	const int x0 = MAX(0, (int)Math::floor(cx - r)), x1 = MIN(TRAIL_RES - 1, (int)Math::ceil(cx + r));
+	const int y0 = MAX(0, (int)Math::floor(cy - r)), y1 = MIN(TRAIL_RES - 1, (int)Math::ceil(cy + r));
+	for (int y = y0; y <= y1; y++) {
+		for (int x = x0; x <= x1; x++) {
+			const float dist = Vector2(x + 0.5f - cx, y + 0.5f - cy).length() / r;
+			if (dist >= 1.0f) {
+				continue;
+			}
+			const float f = 1.0f - dist * dist; // soft rim
+			float &v = trail[y * TRAIL_RES + x];
+			v = MAX(v, MIN(1.0f, p_amount * f * 1.6f));
+		}
+	}
+	trail_dirty = true;
+}
+
+void EdenAmbience::_update_trail(float p_delta) {
+	if (!trail_active) {
+		return;
+	}
+	// Falling snow fills paths back in (about as fast as fresh cover builds up)
+	const float refill = local.precipitation * local_freezing * snow_rate / 60.0f * 3.0f * p_delta;
+	if (refill > 0.0f) {
+		for (float &v : trail) {
+			v = MAX(0.0f, v - refill);
+		}
+		trail_dirty = true;
+	}
+	trail_upload_timer -= p_delta;
+	if (!trail_dirty || trail_upload_timer > 0.0f) {
+		return;
+	}
+	trail_upload_timer = 1.0f / 20.0f;
+	trail_dirty = false;
+	PackedByteArray bytes;
+	bytes.resize(TRAIL_RES * TRAIL_RES);
+	uint8_t *w = bytes.ptrw();
+	for (int i = 0; i < TRAIL_RES * TRAIL_RES; i++) {
+		w[i] = (uint8_t)CLAMP((int)(trail[i] * 255.0f + 0.5f), 0, 255);
+	}
+	trail_image = Image::create_from_data(TRAIL_RES, TRAIL_RES, false, Image::FORMAT_R8, bytes);
+	RenderingServer *rs = RenderingServer::get_singleton();
+	const bool first = trail_texture.is_null();
+	if (first) {
+		trail_texture = ImageTexture::create_from_image(trail_image);
+		rs->global_shader_parameter_set("eden_snow_trail_map", trail_texture->get_rid());
+	} else {
+		trail_texture->update(trail_image);
+	}
+	const Vector4 frame(trail_center.x, trail_center.y, trail_center.z, TRAIL_SIZE * 0.5f);
+	const Vector4 axis_u(trail_u.x, trail_u.y, trail_u.z, 1.0f);
+	const Vector4 axis_v(trail_v.x, trail_v.y, trail_v.z, TRAIL_PRESS);
+	rs->global_shader_parameter_set("eden_snow_trail_frame", frame);
+	rs->global_shader_parameter_set("eden_snow_trail_u", axis_u);
+	rs->global_shader_parameter_set("eden_snow_trail_v", axis_v);
+	// GPU-driven terrain can't bind global textures: the same on its material (see eden_weather.gdshaderinc)
+	Node3D *planet_node = _get_planet();
+	Ref<ShaderMaterial> terrain_mat = planet_node ? Ref<ShaderMaterial>(planet_node->get("material")) : Ref<ShaderMaterial>();
+	if (terrain_mat.is_valid()) {
+		if (first) {
+			terrain_mat->set_shader_parameter("eden_snow_trail_map", trail_texture);
+		}
+		terrain_mat->set_shader_parameter("eden_snow_trail_frame", frame);
+		terrain_mat->set_shader_parameter("eden_snow_trail_u", axis_u);
+		terrain_mat->set_shader_parameter("eden_snow_trail_v", axis_v);
+	}
+}
+
 void EdenAmbience::add_storm(const Vector3 &p_world_position, float p_radius, float p_intensity, float p_duration, bool p_thunder, bool p_dust) {
 	// May run before the first survey: resolve the planet directly
 	Vector3 center = state.center;
@@ -1458,6 +1611,10 @@ void EdenAmbience::add_storm(const Vector3 &p_world_position, float p_radius, fl
 
 void EdenAmbience::clear_snow_and_wetness() {
 	weather.clear_cover();
+	for (float &v : trail) {
+		v = 0.0f;
+	}
+	trail_dirty = trail_active;
 }
 
 Ref<ImageTexture> EdenAmbience::get_weather_texture() const {
@@ -1543,6 +1700,9 @@ void EdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_effect", "effect"), &EdenAmbience::get_effect);
 	ClassDB::bind_method(D_METHOD("get_debug_state"), &EdenAmbience::get_debug_state);
 	ClassDB::bind_method(D_METHOD("get_weather_at", "world_position"), &EdenAmbience::get_weather_at);
+	ClassDB::bind_method(D_METHOD("get_snow_depth_at", "world_position"), &EdenAmbience::get_snow_depth_at);
+	ClassDB::bind_method(D_METHOD("get_snow_trail_at", "world_position"), &EdenAmbience::get_snow_trail_at);
+	ClassDB::bind_method(D_METHOD("press_snow", "world_position", "radius", "amount"), &EdenAmbience::press_snow);
 	ClassDB::bind_method(D_METHOD("add_storm", "world_position", "radius", "intensity", "duration", "thunder", "dust"), &EdenAmbience::add_storm, DEFVAL(false), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("clear_snow_and_wetness"), &EdenAmbience::clear_snow_and_wetness);
 	ClassDB::bind_method(D_METHOD("strike_lightning", "world_position", "cloud_only"), &EdenAmbience::strike_lightning, DEFVAL(Vector3()), DEFVAL(false));

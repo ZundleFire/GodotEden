@@ -55,7 +55,7 @@ void vertex() {
 	VERTEX *= step(fract(sin(dot(MODEL_MATRIX[3].xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453), eden_health_keep(health));
 	// Buried by snow: tufts sink as it piles up (the terrain rises by the same depth)
 	vec4 weather = eden_weather_near(MODEL_MATRIX[3].xyz);
-	VERTEX.y -= weather.g * eden_weather_params.x * 1.6;
+	VERTEX.y -= weather.g * eden_weather_params.x * 1.6 * (weather.g > 0.0 ? eden_snow_left(MODEL_MATRIX[3].xyz) : 1.0);
 	v_albedo = mix(u_base_color, u_tip_color, u_base_lift + (1.0 - u_base_lift) * h) * shade;
 	// Seasons (EdenCalendar): a fresh flush in spring, browning in autumn, dormant straw and a little shorter in winter
 	vec3 gs = eden_grass_state_tropical(eden_grass_state(eden_season_here(MODEL_MATRIX[3].xyz, eden_weather_planet.xyz)),
