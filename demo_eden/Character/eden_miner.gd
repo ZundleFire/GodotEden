@@ -35,7 +35,8 @@ const MATERIAL_ITEM := [0, 1, 3, 2, 0, 4, 2]
 @export var reach := 6.0
 ## Terrain voxels are 1 m: smaller spheres only dent the surface
 @export var dig_radius := 1.3
-@export var place_radius := 1.2
+## Placing is the exact inverse of digging (same sphere, centred on the surface): what one dig takes, one place puts back
+@export var place_radius := 1.3
 @export var repeat_time := 0.25
 
 var counts: Array[int] = [0, 0, 0, 0, 0, 0]
@@ -144,7 +145,7 @@ func place() -> bool:
 	if counts[selected] <= 0:
 		_toast_msg("No %s left" % ITEMS[selected][0])
 		return false
-	var at := target_position + target_normal * (place_radius * 0.6)
+	var at := target_position
 	if _inside_player(at, place_radius + 0.15):
 		_toast_msg("Too close")
 		return false

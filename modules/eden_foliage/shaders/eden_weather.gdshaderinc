@@ -78,3 +78,16 @@ float eden_snow_trail(vec3 world_pos) {
 float eden_snow_left(vec3 world_pos) {
 	return 1.0 - eden_snow_trail_v.w * eden_snow_trail(world_pos);
 }
+
+// The same, averaged over ~1.5 m: for lowering the ground itself, whose vertices are ~1 m apart. Sampled at single
+// points a narrow path snaps to the triangle grid and a straight line of steps turns into a staircase.
+float eden_snow_left_soft(vec3 world_pos) {
+	if (eden_snow_trail_u.w < 0.5) {
+		return 1.0;
+	}
+	vec3 u = eden_snow_trail_u.xyz * 0.75;
+	vec3 v = eden_snow_trail_v.xyz * 0.75;
+	float t = eden_snow_trail(world_pos) * 2.0 + eden_snow_trail(world_pos + u) + eden_snow_trail(world_pos - u) +
+			eden_snow_trail(world_pos + v) + eden_snow_trail(world_pos - v);
+	return 1.0 - eden_snow_trail_v.w * t / 6.0;
+}

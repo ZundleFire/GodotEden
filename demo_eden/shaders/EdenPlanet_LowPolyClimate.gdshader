@@ -624,7 +624,7 @@ void vertex() {
 	v_weather = weather.gb;
 	if (weather.g > 0.0) {
 		// (less where feet have pressed a path into it)
-		vec3 snow_lift = eden_weather_up(v_pos_world) * weather.g * eden_weather_params.x * eden_snow_left(v_pos_world);
+		vec3 snow_lift = eden_weather_up(v_pos_world) * weather.g * eden_weather_params.x * eden_snow_left_soft(v_pos_world);
 		v_pos_world += snow_lift;
 		VERTEX += snow_lift * mat3(MODEL_MATRIX); // inverse of a rigid transform's rotation
 	}
