@@ -77,3 +77,7 @@ eden_calendar_axis={
 "type": "vec4",
 "value": Vector4(0, 1, 0, 0)
 }
+
+[physics]
+
+common/physics_interpolation=true

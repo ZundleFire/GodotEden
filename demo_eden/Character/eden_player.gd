@@ -151,6 +151,7 @@ func _ready() -> void:
 	_pivot = Node3D.new()
 	_pivot.name = "CameraPivot"
 	_pivot.top_level = true
+	_pivot.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF # placed every frame, below
 	add_child(_pivot)
 	_arm = SpringArm3D.new()
 	_arm.spring_length = camera_distance
@@ -537,8 +538,10 @@ func _wait_for_ground(up: Vector3) -> void:
 		return
 	if not hit.is_empty():
 		global_position = hit.position + up * 0.05
+		reset_physics_interpolation()
 	if water_depth() > float_depth: # the ground is the sea floor, or not loaded under the sea: float at the surface
 		global_position = _center() + up * (_sea_radius - float_depth)
+		reset_physics_interpolation()
 	ready_to_move = true
 	_facing = _north(up)
 	global_basis = Basis.looking_at(_facing, up)
@@ -572,6 +575,7 @@ func _rescue_if_buried(up: Vector3) -> void:
 	if sdf <= 0.0:
 		return
 	global_position = _planet.to_global(local) + up * 0.5
+	reset_physics_interpolation()
 	velocity = Vector3.ZERO
 	swimming = false
 	ready_to_move = false
@@ -657,10 +661,13 @@ func _process(_delta: float) -> void:
 	var cam_target := camera_height - 0.5 if crouching else (camera_height + 0.8 if swimming else camera_height)
 	_cam_height = lerpf(_cam_height, cam_target, 1.0 - exp(-_delta * 6.0))
 	# Camera: above the character, turned to the camera heading and pitched, aligned with the planet
-	var up := (global_position - _center()).normalized()
+	# The camera follows where the body is drawn (interpolated between physics steps), not the physics position,
+	# which moves in 60 Hz steps: on a faster display the whole world shuddered against the character
+	var body := get_global_transform_interpolated().origin
+	var up := (body - _center()).normalized()
 	var heading := _north(up).rotated(up, _yaw)
 	_pivot.global_transform = Transform3D(Basis.looking_at(heading, up) * Basis(Vector3.RIGHT, _pitch),
-			global_position + up * _cam_height + heading.cross(up) * camera_shoulder)
+			body + up * _cam_height + heading.cross(up) * camera_shoulder)
 	_arm.spring_length = camera_distance
 	_keep_camera_above_snow(up, _delta)
 	if _hud and _hud.visible:
