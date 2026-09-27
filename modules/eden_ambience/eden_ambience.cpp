@@ -624,7 +624,7 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 		wp.seed = weather_seed;
 		weather.natural = -1; // reseed
 	}
-	wp.cell_count = storm_count;
+	wp.cell_count = weather_external ? 0 : storm_count;
 	wp.wind_speed = storm_speed;
 	wp.min_radius = storm_min_radius;
 	wp.max_radius = MAX(storm_max_radius, storm_min_radius);
@@ -716,7 +716,7 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 	const float t = state.temperature - 0.04f + 0.08f * MAX(p_sun.dot(up), 0.0f);
 	local_freezing = 1.0f - _smoothstep(freeze_temperature - 0.03f, freeze_temperature + 0.03f, t);
 	// Forced snow freezes, forced rain thaws, around the camera
-	if (ov_mode == WEATHER_SNOW) {
+	if (ov_mode == WEATHER_SNOW || (weather_external && ext_snow)) {
 		local_freezing = Math::lerp(local_freezing, 1.0f, ov_strength);
 	} else if (ov_mode == WEATHER_RAIN || ov_mode == WEATHER_THUNDERSTORM) {
 		local_freezing = Math::lerp(local_freezing, 0.0f, ov_strength);
@@ -750,6 +750,35 @@ void EdenAmbience::_update_weather(double p_delta, const Vector3 &p_cam, const V
 // weather_override: a storm (or a clear zone) that follows the camera. Switching fades the old one out
 // before the new one fades in over override_fade.
 void EdenAmbience::_update_override(float p_delta, const Vector3 &p_up) {
+	if (weather_external) {
+		// The game's weather: one storm cell (or a clear zone) riding with the camera. Strength follows the cloud
+		// cover, the cell's intensity the precipitation; both ease toward their targets.
+		// Linear, so a change is complete (to exactly 0 when the rain stops) after override_fade
+		const float k = p_delta / MAX(override_fade, 0.01f);
+		const bool any = ext_intensity > 0.0f || ext_cloud > 0.0f;
+		const float strength = any ? MAX(ext_cloud, ext_intensity > 0.0f ? 1.0f : 0.0f) : 1.0f;
+		ov_strength = Math::move_toward(ov_strength, strength, k);
+		ext_intensity_now = Math::move_toward(ext_intensity_now, ext_intensity, k);
+		ext_fog_now = Math::move_toward(ext_fog_now, ext_fog, k);
+		ov_mode = WEATHER_AUTO;
+		EdenWeatherSim::Override &o = weather.override_zone;
+		o.dir = p_up;
+		o.radius = override_radius / MAX(state.planet_radius, 1.0f);
+		o.strength = ov_strength;
+		o.mode = any ? EdenWeatherSim::Override::STORM : EdenWeatherSim::Override::CLEAR;
+		o.temperature = ext_intensity > 0.0f && ext_snow ? -1 : 0; // else the climate decides rain or snow
+		EdenWeatherSim::Cell &c = o.cell;
+		c.dir = p_up;
+		c.radius = o.radius;
+		c.life = 1e9f;
+		c.age = 0.5e9f;
+		c.drift = 0.0f;
+		c.dust = false;
+		c.thunder = ext_thunder;
+		c.intensity = ext_intensity_now;
+		return;
+	}
+	ext_fog_now = 0.0f;
 	const int target = CLAMP(weather_override, 0, WEATHER_MAX - 1);
 	if (target != ov_mode) {
 		ov_strength -= p_delta / 0.75f;
@@ -801,6 +830,14 @@ void EdenAmbience::_update_override(float p_delta, const Vector3 &p_up) {
 			o.mode = EdenWeatherSim::Override::NONE;
 			break;
 	}
+}
+
+void EdenAmbience::set_external_weather(float p_intensity, float p_cloud, bool p_snow, bool p_thunder, float p_fog) {
+	ext_intensity = CLAMP(p_intensity, 0.0f, 1.0f);
+	ext_cloud = CLAMP(p_cloud, 0.0f, 1.0f);
+	ext_snow = p_snow;
+	ext_thunder = p_thunder;
+	ext_fog = CLAMP(p_fog, 0.0f, 1.0f);
 }
 
 String EdenAmbience::get_weather_name() const {
@@ -1133,7 +1170,7 @@ void EdenAmbience::_update(double p_delta) {
 	if (drive_atmo && fog_enabled) {
 		const float humid = _smoothstep(0.3f, 0.8f, state.moisture) * (1.0f - cold * 0.5f);
 		const float low_sun = 1.0f - _smoothstep(0.05f, 0.4f, state.sun_elevation);
-		const float target = MAX(humid * (0.15f + 0.85f * low_sun), MAX(rain_amount * 0.6f, MAX(precip * storm_fog + local.cloud * 0.15f, dust_storm * dust_fog)));
+		const float target = MAX(MAX(humid * (0.15f + 0.85f * low_sun), ext_fog_now * 2.5f), MAX(rain_amount * 0.6f, MAX(precip * storm_fog + local.cloud * 0.15f, dust_storm * dust_fog)));
 		const float k = mist < 0.0f ? 1.0f : 1.0f - Math::exp(-(float)p_delta / 4.0f);
 		mist = mist < 0.0f ? target : Math::lerp(mist, target, k);
 		mist_ground = Math::lerp(mist_ground, MAX(state.ground_height, 0.0f), k);
@@ -1473,6 +1510,7 @@ void EdenAmbience::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_snow_and_wetness"), &EdenAmbience::clear_snow_and_wetness);
 	ClassDB::bind_method(D_METHOD("strike_lightning", "world_position", "cloud_only"), &EdenAmbience::strike_lightning, DEFVAL(Vector3()), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("cycle_weather", "step"), &EdenAmbience::cycle_weather, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("set_external_weather", "intensity", "cloud", "snow", "thunder", "fog"), &EdenAmbience::set_external_weather);
 	ClassDB::bind_method(D_METHOD("get_weather_name"), &EdenAmbience::get_weather_name);
 	ClassDB::bind_method(D_METHOD("get_weather_texture"), &EdenAmbience::get_weather_texture);
 

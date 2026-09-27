@@ -82,6 +82,7 @@ static inline PackedColorArray _eden_default_bolt_colors() {
 	X(float, wind_wander, 40.0f, PROPERTY_HINT_RANGE, "0,180,1,degrees", "Wind")                                \
 	X(bool, weather_enabled, true, PROPERTY_HINT_NONE, "", "Weather")                                           \
 	X(int, weather_override, 0, PROPERTY_HINT_ENUM, "Auto,Clear,Rain,Thunderstorm,Snow,Dust Storm", "Weather")  \
+	X(bool, weather_external, false, PROPERTY_HINT_NONE, "", "Weather")                                         \
 	X(float, override_radius, 6000.0f, PROPERTY_HINT_RANGE, "500,50000,10,suffix:m", "Weather")                 \
 	X(float, override_fade, 4.0f, PROPERTY_HINT_RANGE, "0.0,60.0,0.1,suffix:s", "Weather")                      \
 	X(int, weather_seed, 1, PROPERTY_HINT_RANGE, "0,100000,1", "Weather")                                       \
@@ -295,6 +296,10 @@ private:
 	Vector4 weather_planet_pushed;
 	float ov_strength = 0.0f;
 	int ov_mode = WEATHER_AUTO;
+	// set_external_weather() targets, and the eased values in use
+	float ext_intensity = 0.0f, ext_cloud = 0.0f, ext_fog = 0.0f;
+	bool ext_snow = false, ext_thunder = false;
+	float ext_intensity_now = 0.0f, ext_fog_now = 0.0f;
 	float forest_here = -1.0f; // forest density within ~25 m (< 0: no foliage node to ask)
 	float applied_exposure = -1.0f, applied_saturation = -1.0f;
 
@@ -364,6 +369,11 @@ public:
 	void strike_lightning(const Vector3 &p_world_position, bool p_cloud_only);
 	// Steps weather_override (Auto, Clear, Rain, Thunderstorm, Snow, Dust Storm) and returns the new one's name
 	String cycle_weather(int p_step);
+	// With weather_external: the weather around the camera, set by the game (e.g. from a server's weather zones).
+	// No natural storms roam and weather_override is ignored; changes ease in over override_fade.
+	//   intensity: precipitation 0..1 (0 with cloud > 0 = overcast, no rain); cloud: cover 0..1;
+	//   snow: forced snow (else the local climate decides rain or snow); thunder: lightning; fog: extra fog 0..1
+	void set_external_weather(float p_intensity, float p_cloud, bool p_snow, bool p_thunder, float p_fog);
 	String get_weather_name() const;
 	Ref<ImageTexture> get_weather_texture() const;
 
