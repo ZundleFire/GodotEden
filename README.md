@@ -1,3 +1,12 @@
+# GodotEden
+
+A fork of Godot 4.6 with engine modules for a voxel planet game (planet generation, atmosphere, ocean, weather,
+foliage) and a playable demo planet in `demo_eden/`. **To build and run it, see [SETUP.md](SETUP.md).**
+
+The original Godot README follows.
+
+---
+
 # Godot Engine
 
 <p align="center">

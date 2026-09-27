@@ -1,5 +1,7 @@
 # Building GodotEden on Windows (Vulkan)
 
+> The current, complete setup guide is [SETUP.md](SETUP.md) (submodules, optional assets, demo, tests). This file keeps extra detail on build flags.
+
 ## Prerequisites
 
 ### 1. Visual Studio 2022

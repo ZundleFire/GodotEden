@@ -1,7 +1,7 @@
 [submodule "modules/voxel"]
 	path = modules/voxel
 	url = https://github.com/ZundleFire/godot_voxel
-	branch = eden/main
+	branch = GPU_Renderer
 [submodule "eden_modules"]
 	path = eden_modules
 	url = https://github.com/ZundleFire/EdenModules.git
