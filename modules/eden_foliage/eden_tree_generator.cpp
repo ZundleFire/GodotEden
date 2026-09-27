@@ -4,6 +4,7 @@
 #include "core/math/math_funcs.h"
 #include "core/templates/vector.h"
 #include "eden_tree_mesher.h"
+#include "scene/resources/surface_tool.h"
 
 namespace {
 
@@ -384,6 +385,84 @@ Ref<ArrayMesh> build_foliage_mesh(
 	return mesher.build_foliage_mesh();
 }
 
+// Conifer crown: stacked drooping "skirts" up the trunk, each a low-poly cone whose lower rim is a zigzag of
+// needle-tips, shrinking toward a spire at the top -- the stylised pine silhouette (tiers reading as whorls of
+// branches), instead of leaf blobs on limbs. Flat-shaded, closed underneath so it reads from below too.
+Ref<ArrayMesh> build_conifer_crown(const TrunkChain &p_trunk, const Ref<RandomNumberGenerator> &p_rng, const Ref<EdenTreeShape> &p_shape) {
+	const float height = p_shape->get_trunk_height();
+	const int tiers = p_rng->randi_range(5, 7);
+	const int sides = p_rng->randi_range(7, 9);
+	const float base_radius = height * p_rng->randf_range(0.21f, 0.26f);
+	const float start_t = p_rng->randf_range(0.2f, 0.28f); // bare trunk below the first tier
+	Ref<SurfaceTool> st;
+	st.instantiate();
+	st->begin(Mesh::PRIMITIVE_TRIANGLES);
+	st->set_smooth_group(UINT32_MAX); // flat shading
+	auto tri = [&](const Vector3 &a, const Vector3 &b, const Vector3 &c) {
+		st->add_vertex(a);
+		st->add_vertex(b);
+		st->add_vertex(c);
+	};
+	const TrunkPoint top = trunk_sample(p_trunk, 1.0f);
+	const float span = 1.0f - start_t;
+	for (int i = 0; i < tiers; i++) {
+		const float f = float(i) / float(tiers); // 0 bottom tier .. near 1 top tier
+		// Closer together as they get smaller, the top tier just under the spire
+		const float g = float(i) / (float(tiers) - 0.6f);
+		const float t = start_t + span * (1.0f - Math::pow(1.0f - g, 1.5f));
+		const TrunkPoint c = trunk_sample(p_trunk, t);
+		const float radius = base_radius * Math::pow(1.0f - f * 0.88f, 0.9f) * p_rng->randf_range(0.92f, 1.08f);
+		const float tier_h = MAX(radius * p_rng->randf_range(0.85f, 1.05f), height * 0.06f);
+		// Each tier overlaps the one above so no trunk shows between them
+		const Vector3 up = c.dir.normalized();
+		Vector3 side = up.cross(Vector3(1, 0, 0));
+		if (side.length_squared() < 1e-4f) {
+			side = up.cross(Vector3(0, 0, 1));
+		}
+		side.normalize();
+		const Vector3 side2 = up.cross(side).normalized();
+		const float yaw = p_rng->randf_range(0.0f, Math::TAU);
+		const Vector3 apex = c.pos + up * (tier_h * 0.75f);
+		const Vector3 hub = c.pos - up * (tier_h * 0.08f); // underside meets the trunk
+		const int n = sides * 2; // rim: alternating long tips and short notches
+		Vector<Vector3> rim;
+		rim.resize(n);
+		for (int k = 0; k < n; k++) {
+			const float a = yaw + Math::TAU * float(k) / float(n);
+			const bool tip = (k % 2) == 0;
+			const float r = radius * (tip ? p_rng->randf_range(0.95f, 1.1f) : p_rng->randf_range(0.62f, 0.74f));
+			const float drop = tier_h * (tip ? p_rng->randf_range(0.28f, 0.4f) : p_rng->randf_range(0.08f, 0.16f));
+			rim.write[k] = c.pos + (side * Math::cos(a) + side2 * Math::sin(a)) * r - up * drop;
+		}
+		for (int k = 0; k < n; k++) {
+			const Vector3 &a = rim[k];
+			const Vector3 &b = rim[(k + 1) % n];
+			tri(apex, b, a); // outer skirt
+			tri(hub, a, b); // underside
+		}
+	}
+	// Spire above the top tier
+	const Vector3 up = top.dir.normalized();
+	const float spire_r = base_radius * 0.12f;
+	const Vector3 spire_base = top.pos - up * (height * 0.04f);
+	const Vector3 spire_tip = top.pos + up * (height * p_rng->randf_range(0.1f, 0.14f));
+	Vector3 side = up.cross(Vector3(1, 0, 0));
+	if (side.length_squared() < 1e-4f) {
+		side = up.cross(Vector3(0, 0, 1));
+	}
+	side.normalize();
+	const Vector3 side2 = up.cross(side).normalized();
+	for (int k = 0; k < 5; k++) {
+		const float a0 = Math::TAU * float(k) / 5.0f, a1 = Math::TAU * float(k + 1) / 5.0f;
+		const Vector3 p0 = spire_base + (side * Math::cos(a0) + side2 * Math::sin(a0)) * spire_r;
+		const Vector3 p1 = spire_base + (side * Math::cos(a1) + side2 * Math::sin(a1)) * spire_r;
+		tri(spire_tip, p1, p0);
+		tri(spire_base, p0, p1);
+	}
+	st->generate_normals();
+	return st->commit();
+}
+
 } // namespace
 
 Ref<EdenTreeShape> EdenTreeGenerator::build_random_shape(const Ref<RandomNumberGenerator> &p_rng) {
@@ -582,7 +661,9 @@ Dictionary EdenTreeGenerator::build(const Ref<RandomNumberGenerator> &p_rng, con
 	// Branches fork off anywhere across the trunk's height (species-controlled range), each
 	// with its own joint connector ("elbow spine": one extra overlapping beam biased toward the
 	// thicker/trunk side).
-	for (int i = 0; i < p_shape->get_branch_count(); i++) {
+	// Conifers: the tiered crown stands in for limbs and leaf blobs (see build_conifer_crown)
+	const bool conifer = p_shape->get_tree_type() == EdenTreeShape::TREE_PINE;
+	for (int i = 0; i < (conifer ? 0 : p_shape->get_branch_count()); i++) {
 		const float t = p_rng->randf_range(p_shape->get_fork_t_min(), p_shape->get_fork_t_max());
 		const TrunkPoint s = trunk_sample(trunk, t);
 
@@ -613,7 +694,7 @@ Dictionary EdenTreeGenerator::build(const Ref<RandomNumberGenerator> &p_rng, con
 
 	// Small upward twigs clustered right at the apex, thinner and more vertical than the main
 	// branches -- a bare straight-to-a-point crown reads as unnaturally simple.
-	const int twig_count = p_rng->randi_range(p_shape->get_crown_twig_count_min(), p_shape->get_crown_twig_count_max());
+	const int twig_count = conifer ? 0 : p_rng->randi_range(p_shape->get_crown_twig_count_min(), p_shape->get_crown_twig_count_max());
 	for (int i = 0; i < twig_count; i++) {
 		const float t = p_rng->randf_range(0.88f, 0.99f);
 		const TrunkPoint s = trunk_sample(trunk, t);
@@ -632,7 +713,7 @@ Dictionary EdenTreeGenerator::build(const Ref<RandomNumberGenerator> &p_rng, con
 	Color leaf_color;
 	if (leaf_params.has_leaves) {
 		const float leaf_radius = p_shape->get_trunk_base_radius() * p_shape->get_leaf_radius_mul();
-		foliage_mesh = build_foliage_mesh(leaf_tips, p_rng, leaf_radius, p_shape);
+		foliage_mesh = conifer ? build_conifer_crown(trunk, p_rng, p_shape) : build_foliage_mesh(leaf_tips, p_rng, leaf_radius, p_shape);
 		leaf_color = Color::from_hsv(
 				p_rng->randf_range(leaf_params.hue_min, leaf_params.hue_max),
 				p_rng->randf_range(leaf_params.sat_min, leaf_params.sat_max),

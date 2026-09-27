@@ -373,9 +373,21 @@ static func _faceted_stone(rng: RandomNumberGenerator, layer: EdenFoliageLayer, 
 	patches.seed = rng.randi()
 	patches.frequency = 2.2
 	var pts := PackedVector3Array()
+	# Cleaving planes: everything past one is pressed flat onto it, so the stone breaks into a few big fractured
+	# faces (the stylised rock look) instead of reading as a lumpy ball. Pebbles stay rounded.
+	var cuts := []
+	if detail > 0:
+		for i in rng.randi_range(5, 8):
+			var n := Vector3(rng.randf_range(-1, 1), rng.randf_range(-0.3, 1.0), rng.randf_range(-1, 1)).normalized()
+			cuts.append([n, rng.randf_range(0.55, 0.8)])
 	for p: Vector3 in sphere[0]:
 		var d := 1.0 + noise.get_noise_3dv(p) * layer.roughness * 1.4
-		var q := p * d * half
+		var q := p * d
+		for c in cuts:
+			var over: float = q.dot(c[0]) - c[1]
+			if over > 0.0:
+				q -= c[0] * over
+		q *= half
 		q.y = maxf(q.y, -half.y * 0.45) # flat base: sits on the ground instead of rolling
 		pts.append(q)
 	var base_y := -half.y * 0.45 + half.y * 0.12 # sink the base a little
@@ -385,8 +397,12 @@ static func _faceted_stone(rng: RandomNumberGenerator, layer: EdenFoliageLayer, 
 		var c: Vector3 = pts[tri[2]]
 		var n := (b - a).cross(c - a).normalized() # icosphere table is CCW from outside
 		var center := (a + b + c) / 3.0
-		var col := layer.rock_color * (1.0 + rng.randf_range(-layer.color_variation, layer.color_variation))
-		col = col.lerp(Color(col.r * 1.05, col.g, col.b * 0.92), rng.randf() * 0.5) # warm/cool facet shifts
+		# One shade per plane (from the rounded normal), so a cleaved face reads as one face, not confetti
+		var face := Vector3i(roundi(n.x * 4.0), roundi(n.y * 4.0), roundi(n.z * 4.0))
+		var shade := RandomNumberGenerator.new()
+		shade.seed = hash([face, rng.seed])
+		var col := layer.rock_color * (1.0 + shade.randf_range(-layer.color_variation, layer.color_variation))
+		col = col.lerp(Color(col.r * 1.05, col.g, col.b * 0.92), shade.randf() * 0.5) # warm/cool facet shifts
 		var up := n.y
 		var patch := patches.get_noise_3dv(center / maxf(half.length(), 0.01)) * 0.5 + 0.5
 		if up > 0.25 and patch < layer.moss * (0.4 + up):
