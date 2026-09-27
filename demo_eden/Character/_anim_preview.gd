@@ -57,7 +57,7 @@ func _initialize() -> void:
 		["crawl", "front", func(u): return EdenGait.swim(u, 1.0, u)],
 		["land", "side", func(u):
 			var p := EdenGait.idle(0.0)
-			EdenGait.add_landing(p, 1.0 - u * 1.4)
+			p = EdenGait.add_landing(p, 1.0 - u * 1.4)
 			return p],
 	]
 
@@ -80,7 +80,7 @@ func _process(_d: float) -> bool:
 		var p: Dictionary = row[2].call(PHASES[col])
 		for k in p:
 			if k == "pelvis_offset":
-				skel.set_bone_pose_position(skel.find_bone("pelvis"), EdenGait.PELVIS_REST + p[k])
+				skel.set_bone_pose_position(skel.find_bone("pelvis"), EdenGait.pelvis_rest() + p[k])
 			elif skel.find_bone(k) >= 0:
 				skel.set_bone_pose_rotation(skel.find_bone(k), p[k])
 		# The model faces +Z: side view from +X, front view from +Z
