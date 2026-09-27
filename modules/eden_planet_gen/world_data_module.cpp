@@ -4,6 +4,7 @@
 #include "core/io/file_access.h"
 #include "core/math/random_number_generator.h"
 #include "eden_planet_generator_v1.h"
+#include "eden_planet_generator_v4.h"
 
 // ── SurfaceData ──────────────────────────────────────────────────────────────
 
@@ -64,14 +65,33 @@ WorldDataModule::~WorldDataModule() {
 	}
 }
 
-void WorldDataModule::set_generator(const Ref<EdenPlanetGeneratorV1> &p_generator) {
+void WorldDataModule::set_generator(const Ref<zylann::voxel::VoxelGenerator> &p_generator) {
+	ERR_FAIL_COND_MSG(p_generator.is_valid() && Object::cast_to<EdenPlanetGeneratorV1>(p_generator.ptr()) == nullptr &&
+					Object::cast_to<EdenPlanetGeneratorV4>(p_generator.ptr()) == nullptr,
+			"WorldDataModule: only EdenPlanetGeneratorV1 and EdenPlanetGeneratorV4 can answer surface queries");
 	MutexLock lock(_mutex);
 	_generator = p_generator;
 }
 
-Ref<EdenPlanetGeneratorV1> WorldDataModule::get_generator() const {
+Ref<zylann::voxel::VoxelGenerator> WorldDataModule::get_generator() const {
 	MutexLock lock(_mutex);
 	return _generator;
+}
+
+float WorldDataModule::_generator_radius(const Ref<zylann::voxel::VoxelGenerator> &p_gen) {
+	if (const EdenPlanetGeneratorV1 *v1 = Object::cast_to<EdenPlanetGeneratorV1>(p_gen.ptr())) {
+		return v1->get_planet_radius();
+	}
+	if (const EdenPlanetGeneratorV4 *v4 = Object::cast_to<EdenPlanetGeneratorV4>(p_gen.ptr())) {
+		return v4->get_parameters().planet_radius;
+	}
+	return 0.0f;
+}
+
+float WorldDataModule::get_planet_radius() const {
+	MutexLock lock(_mutex);
+	const float r = _generator_radius(_generator);
+	return r > 0.0f ? r : _planet_radius;
 }
 
 void WorldDataModule::set_planet_center(const Vector3 &p_center) {
@@ -116,7 +136,7 @@ Error WorldDataModule::write_ewd_header(int64_t p_world_seed, int64_t p_seed32, 
 
 	float radius = _planet_radius;
 	if (_generator.is_valid()) {
-		radius = _generator->get_planet_radius();
+		radius = _generator_radius(_generator);
 	}
 
 	const String world_id = itos(p_world_seed);
@@ -223,11 +243,56 @@ static int _map_biome_to_adr(int p_internal) {
 	}
 }
 
+// BiomeClassifier's Holdridge thresholds (eden-project src/gameplay/biome/biome_classifier.gd), for generators
+// that do not carry an ADR biome of their own. Keep in step with that file.
+static int _classify_biome(float p_temperature, float p_rainfall) {
+	if (p_temperature >= 0.75f) {
+		return p_rainfall >= 0.70f ? 0 : (p_rainfall >= 0.30f ? 1 : 2); // TROPICAL_RAINFOREST / SAVANNA / HOT_DESERT
+	}
+	if (p_temperature >= 0.40f) {
+		return p_rainfall >= 0.60f ? 3 : (p_rainfall >= 0.25f ? 4 : 5); // TEMPERATE_RAINFOREST / GRASSLAND / SHRUBLAND
+	}
+	if (p_temperature >= 0.15f) {
+		return p_rainfall >= 0.40f ? 6 : 7; // BOREAL_FOREST / COLD_STEPPE
+	}
+	return 8; // TUNDRA
+}
+
+bool WorldDataModule::_sample(const Ref<zylann::voxel::VoxelGenerator> &p_gen, const Vector3 &p_dir, Sample &r_sample) {
+	if (const EdenPlanetGeneratorV1 *v1 = Object::cast_to<EdenPlanetGeneratorV1>(p_gen.ptr())) {
+		EdenPlanetGeneratorV1::SurfaceSample s;
+		if (!v1->sample_surface(p_dir, s)) {
+			return false; // setup() not completed
+		}
+		r_sample.height = s.height;
+		r_sample.temperature = s.temperature01;
+		r_sample.rainfall = s.rainfall01;
+		r_sample.is_ocean = s.is_ocean;
+		// Sea level sits at planet radius; ocean floors have negative height.
+		r_sample.water_depth = s.is_ocean ? MAX(0.0f, -s.height) : 0.0f;
+		r_sample.biome_type = _map_biome_to_adr(s.biome);
+		return true;
+	}
+	if (const EdenPlanetGeneratorV4 *v4 = Object::cast_to<EdenPlanetGeneratorV4>(p_gen.ptr())) {
+		// ponytail: goes through the bound Dictionary sampler (one point per call), fine at per-entity query rates
+		const Dictionary d = v4->sample_surface(p_dir);
+		const float sea_level = v4->get_parameters().sea_level;
+		r_sample.height = d.get("height", 0.0f);
+		r_sample.temperature = CLAMP(float(d.get("temperature", 0.0f)), 0.0f, 1.0f);
+		r_sample.rainfall = CLAMP(float(d.get("moisture", 0.0f)), 0.0f, 1.0f);
+		r_sample.is_ocean = r_sample.height < sea_level;
+		r_sample.water_depth = MAX(0.0f, sea_level - r_sample.height);
+		r_sample.biome_type = r_sample.is_ocean ? 9 : _classify_biome(r_sample.temperature, r_sample.rainfall);
+		return true;
+	}
+	return false;
+}
+
 Ref<SurfaceData> WorldDataModule::get_surface_data_at(const Vector3 &p_pos) const {
 	Ref<SurfaceData> sd;
 	sd.instantiate();
 
-	Ref<EdenPlanetGeneratorV1> gen;
+	Ref<zylann::voxel::VoxelGenerator> gen;
 	Vector3 center;
 	{
 		MutexLock lock(_mutex);
@@ -235,23 +300,22 @@ Ref<SurfaceData> WorldDataModule::get_surface_data_at(const Vector3 &p_pos) cons
 		center = _planet_center;
 	}
 	ERR_FAIL_COND_V_MSG(gen.is_null(), sd,
-			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() first");
+			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() or set_generator() first");
 
-	EdenPlanetGeneratorV1::SurfaceSample s;
-	if (!gen->sample_surface(p_pos - center, s)) {
-		return sd; // setup() not completed — defaults (UNKNOWN biome)
+	Sample s;
+	if (!_sample(gen, (p_pos - center).normalized(), s)) {
+		return sd; // not ready — defaults (UNKNOWN biome)
 	}
 
 	sd->height = s.height;
-	sd->temperature = s.temperature01;
-	sd->rainfall = s.rainfall01;
+	sd->temperature = s.temperature;
+	sd->rainfall = s.rainfall;
 	sd->is_ocean = s.is_ocean;
-	// Sea level sits at planet radius; ocean floors have negative height.
-	sd->water_depth = s.is_ocean ? MAX(0.0f, -s.height) : 0.0f;
+	sd->water_depth = s.water_depth;
 	// ponytail: radial up — replace with a finite-difference heightfield normal
 	// when the Movement system needs real slope data.
 	sd->surface_normal = (p_pos - center).normalized();
-	sd->biome_type = _map_biome_to_adr(s.biome);
+	sd->biome_type = s.biome_type;
 	return sd;
 }
 
@@ -259,7 +323,7 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 	Array out;
 	ERR_FAIL_COND_V(p_count <= 0, out);
 
-	Ref<EdenPlanetGeneratorV1> gen;
+	Ref<zylann::voxel::VoxelGenerator> gen;
 	Vector3 center;
 	{
 		MutexLock lock(_mutex);
@@ -267,8 +331,8 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 		center = _planet_center;
 	}
 	ERR_FAIL_COND_V_MSG(gen.is_null(), out,
-			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() first");
-	const float radius = gen->get_planet_radius();
+			"WorldDataModule: no generator wired — call EdenPlanetGeneratorV1.setup() or set_generator() first");
+	const float radius = _generator_radius(gen);
 
 	// Filters (all optional).
 	Array biomes = p_filters.get("biomes", Array());
@@ -304,8 +368,8 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 			continue;
 		}
 
-		EdenPlanetGeneratorV1::SurfaceSample s;
-		if (!gen->sample_surface(d, s)) {
+		Sample s;
+		if (!_sample(gen, d, s)) {
 			break; // generator not set up — no point burning the budget
 		}
 		if (land_only && s.is_ocean) {
@@ -314,7 +378,7 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 		if (s.height < min_height || s.height > max_height) {
 			continue;
 		}
-		const int adr_biome = _map_biome_to_adr(s.biome);
+		const int adr_biome = s.biome_type;
 		if (!biomes.is_empty() && !biomes.has(adr_biome)) {
 			continue;
 		}
@@ -340,8 +404,8 @@ Array WorldDataModule::scatter_surface_points(int64_t p_seed, int p_count, const
 		pt["position"] = pos;
 		pt["direction"] = d;
 		pt["height"] = s.height;
-		pt["temperature"] = s.temperature01;
-		pt["rainfall"] = s.rainfall01;
+		pt["temperature"] = s.temperature;
+		pt["rainfall"] = s.rainfall;
 		pt["biome_type"] = adr_biome;
 		pt["is_ocean"] = s.is_ocean;
 		out.push_back(pt);
@@ -362,6 +426,7 @@ Ref<WorldConstants> WorldDataModule::get_world_constants() const {
 void WorldDataModule::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_generator", "generator"), &WorldDataModule::set_generator);
 	ClassDB::bind_method(D_METHOD("get_generator"), &WorldDataModule::get_generator);
+	ClassDB::bind_method(D_METHOD("get_planet_radius"), &WorldDataModule::get_planet_radius);
 	ClassDB::bind_method(D_METHOD("set_planet_center", "center"), &WorldDataModule::set_planet_center);
 	ClassDB::bind_method(D_METHOD("get_planet_center"), &WorldDataModule::get_planet_center);
 	ClassDB::bind_method(D_METHOD("set_worlds_dir", "dir"), &WorldDataModule::set_worlds_dir);

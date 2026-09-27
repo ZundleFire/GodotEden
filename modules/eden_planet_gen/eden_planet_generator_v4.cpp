@@ -794,4 +794,6 @@ void EdenPlanetGeneratorV4::_get_property_list(List<PropertyInfo> *p_list) const
 
 void EdenPlanetGeneratorV4::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("sample_surface", "direction"), &EdenPlanetGeneratorV4::sample_surface);
+	ClassDB::bind_method(D_METHOD("get_planet_radius"), &EdenPlanetGeneratorV4::get_planet_radius);
+	ClassDB::bind_method(D_METHOD("get_sea_level"), &EdenPlanetGeneratorV4::get_sea_level);
 }
