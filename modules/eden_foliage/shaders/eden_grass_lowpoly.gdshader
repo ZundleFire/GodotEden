@@ -43,7 +43,8 @@ float hash11(float n) {
 
 void vertex() {
 	float h = UV.y;
-	float tuft = hash11(float(INSTANCE_ID));
+	// Keyed to where the tuft stands, not its index: removing tufts (digging) swaps indices around
+	float tuft = fract(sin(dot(MODEL_MATRIX[3].xyz, vec3(39.3468, 11.1353, 83.1557))) * 43758.5453);
 	float shade = 1.0 + (tuft * 2.0 - 1.0) * u_color_variation;
 
 	// Per-tuft camera distance, from the view-space origin (precise near the camera, unlike world

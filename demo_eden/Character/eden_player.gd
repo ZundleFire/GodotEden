@@ -550,15 +550,28 @@ func _wait_for_ground(up: Vector3) -> void:
 func _rescue_if_buried(up: Vector3) -> void:
 	if Engine.get_physics_frames() % 20 != 0 or not (_air_time > 1.0 or swimming):
 		return
-	var q := PhysicsRayQueryParameters3D.create(global_position + up * 0.5, global_position + up * 300.0, collision_mask, [get_rid()])
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if hit.is_empty() or not (hit.collider == _planet or (hit.collider is Node and _planet.is_ancestor_of(hit.collider))):
+	# Only when the body is really inside solid ground: a dug pit or a cave has terrain overhead too, and the
+	# generator's surface knows nothing of digging (putting the player there dropped them back into their pit)
+	var vt: VoxelTool = _planet.get_voxel_tool() if _planet is VoxelLodTerrain else null
+	if vt == null:
 		return
-	var gen: Object = _planet.get("generator")
-	var h: float = (hit.position - _center()).length() + 2.0
-	if gen and gen.has_method("sample_surface"):
-		h = maxf(h, float(gen.planet_radius) + float(gen.sample_surface(up).height) + 2.0)
-	global_position = _center() + up * h
+	vt.channel = VoxelBuffer.CHANNEL_SDF
+	var local := _planet.to_local(global_position + up * 0.9)
+	var local_up := (_planet.global_basis.inverse() * up).normalized()
+	var sdf := vt.get_voxel_f(Vector3i(local.round()))
+	if sdf > -0.3:
+		return
+	# Up through the solid to the (edited) surface: the SDF says how far it is at least. (Rays don't work from in
+	# here: the terrain's collision faces aren't hit from inside)
+	var climbed := 0.0
+	while sdf <= 0.0 and climbed < 400.0:
+		var stride := maxf(absf(sdf), 0.5)
+		local += local_up * stride
+		climbed += stride
+		sdf = vt.get_voxel_f(Vector3i(local.round()))
+	if sdf <= 0.0:
+		return
+	global_position = _planet.to_global(local) + up * 0.5
 	velocity = Vector3.ZERO
 	swimming = false
 	ready_to_move = false
