@@ -4,6 +4,7 @@ render_mode diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/eden_weather.gdshaderinc"
 #include "res://shaders/eden_wind.gdshaderinc"
 #include "res://shaders/eden_season_globals.gdshaderinc"
+#include "res://shaders/eden_health.gdshaderinc"
 
 // Low-poly procedural trees from EdenTreeMultiMesh: flat part colours baked into vertex COLOR,
 // mesh origin at the trunk base (+Y up).
@@ -18,6 +19,8 @@ uniform float u_wind_fade_end = 90.0;
 uniform vec2 u_ring = vec2(0.0, 1e9);
 // Leaves follow the seasons (EdenCalendar): turn in autumn, fall, regrow in spring. Off for evergreens and rocks.
 uniform bool u_deciduous = false;
+// Plants (thin out and cool with poor biome health); off for rocks and wood
+uniform bool u_living = true;
 // Leaves a bare tree keeps (dead, brown), so a winter crown isn't just a trunk
 uniform float u_winter_leaves : hint_range(0.0, 1.0) = 0.12;
 
@@ -38,6 +41,10 @@ void vertex() {
 	float dist = length(MODELVIEW_MATRIX[3].xyz);
 	if (dist < u_ring.x || dist >= u_ring.y) {
 		VERTEX = vec3(0.0);
+	}
+	float health = u_living ? eden_health_at(MODEL_MATRIX[3].xyz - eden_weather_planet.xyz) : 1.0;
+	if (hash13(MODEL_MATRIX[3].xyz + vec3(0.37)) > eden_health_keep(health)) {
+		VERTEX = vec3(0.0); // this plant died back with the biome
 	}
 	vec4 weather = eden_weather(MODEL_MATRIX[3].xyz);
 	v_albedo = COLOR.rgb;
@@ -60,6 +67,7 @@ void vertex() {
 		v_leaf = face;
 		v_fallen = ls.y * (1.0 - u_winter_leaves);
 	}
+	v_albedo = eden_health_tint(v_albedo, health);
 	v_albedo *= 1.0 - 0.75 * eden_weather_params.y * weather.b;
 	if (weather.g > 0.0) {
 		// Snow caps the upward-facing facets (branches, crowns, rock tops)

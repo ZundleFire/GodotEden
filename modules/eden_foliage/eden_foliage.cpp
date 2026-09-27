@@ -113,6 +113,16 @@ void EdenFoliage::set_config(const Ref<EdenFoliageConfig> &p_config) {
 EDEN_FOLIAGE_PROPERTIES(EDEN_F_SET)
 #undef EDEN_F_SET
 
+void EdenFoliage::set_biome_health_map(const Ref<Texture2D> &p_map) {
+	biome_health_map = p_map;
+	_update_materials();
+}
+
+void EdenFoliage::set_biome_health_cell(float p_cell) {
+	biome_health_cell = MAX(p_cell, 1e-4f);
+	_update_materials();
+}
+
 Ref<EdenFoliageConfig> EdenFoliage::_get_config() {
 	if (config.is_null()) {
 		config = EdenFoliageConfig::make_default();
@@ -222,6 +232,18 @@ void EdenFoliage::_rebuild() {
 }
 
 void EdenFoliage::_update_materials() {
+	// Biome health on every plant material (grass, the shared plant/rock materials, ring materials)
+	Vector<Ref<ShaderMaterial>> all = grass_materials;
+	all.push_back(EdenFoliageMeshes::get_material(true));
+	all.push_back(EdenFoliageMeshes::get_material(false));
+	for (const Variant &k : ring_materials.keys()) {
+		all.push_back(ring_materials[k]);
+	}
+	for (const Ref<ShaderMaterial> &m : all) {
+		m->set_shader_parameter("u_health_enabled", biome_health_map.is_valid());
+		m->set_shader_parameter("u_health_map", biome_health_map);
+		m->set_shader_parameter("u_health_cell", biome_health_cell);
+	}
 	for (const Ref<ShaderMaterial> &m : grass_materials) {
 		m->set_shader_parameter("u_fade_start", grass_fade_start);
 		m->set_shader_parameter("u_fade_end", grass_fade_end);
@@ -658,6 +680,7 @@ Ref<ShaderMaterial> EdenFoliage::_ring_material(bool p_sways, float p_inner, flo
 		m->set_shader(EdenFoliageMeshes::get_tree_shader());
 		if (!p_sways) {
 			m->set_shader_parameter("u_wind_strength", 0.0f);
+			m->set_shader_parameter("u_living", false); // rocks and wood
 		}
 		m->set_shader_parameter("u_ring", Vector2(p_inner, p_outer));
 		m->set_shader_parameter("u_deciduous", p_deciduous);
@@ -703,7 +726,15 @@ void EdenFoliage::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_forest_density", "world_position"), &EdenFoliage::get_forest_density);
 	ClassDB::bind_method(D_METHOD("get_item_kinds"), &EdenFoliage::get_item_kinds);
 
+	ClassDB::bind_method(D_METHOD("set_biome_health_map", "map"), &EdenFoliage::set_biome_health_map);
+	ClassDB::bind_method(D_METHOD("get_biome_health_map"), &EdenFoliage::get_biome_health_map);
+	ClassDB::bind_method(D_METHOD("set_biome_health_cell", "radians"), &EdenFoliage::set_biome_health_cell);
+	ClassDB::bind_method(D_METHOD("get_biome_health_cell"), &EdenFoliage::get_biome_health_cell);
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "config", PROPERTY_HINT_RESOURCE_TYPE, "EdenFoliageConfig"), "set_config", "get_config");
+	ADD_GROUP("Biome Health", "biome_health_");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "biome_health_map", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D", PROPERTY_USAGE_EDITOR), "set_biome_health_map", "get_biome_health_map");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_health_cell", PROPERTY_HINT_RANGE, "0.001,0.5,0.001"), "set_biome_health_cell", "get_biome_health_cell");
+	ADD_GROUP("", "");
 	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "item_kinds", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_item_kinds");
 	String group;
 #define EDEN_F_BIND(m_type, m_name, m_default, m_vtype, m_hint, m_hint_string, m_group, m_action)          \

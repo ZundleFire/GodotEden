@@ -3,6 +3,8 @@
 
 #include "eden_foliage_config.h"
 
+#include "scene/resources/texture.h"
+
 #include "modules/voxel/terrain/instancing/voxel_instancer.h"
 
 class FastNoiseLite;
@@ -51,6 +53,14 @@ public:
 	void set_config(const Ref<EdenFoliageConfig> &p_config);
 	Ref<EdenFoliageConfig> get_config() const { return config; }
 
+	// Biome health (0..1 in red) per zone cell of a latitude/longitude grid, `biome_health_cell` radians per cell:
+	// width 2*PI/cell (longitude from -PI), height PI/cell (latitude from the south pole). Living plants thin out and
+	// cool toward grey-green where it is low. Null: everything healthy.
+	void set_biome_health_map(const Ref<Texture2D> &p_map);
+	Ref<Texture2D> get_biome_health_map() const { return biome_health_map; }
+	void set_biome_health_cell(float p_cell);
+	float get_biome_health_cell() const { return biome_health_cell; }
+
 #define EDEN_F_DECL(m_type, m_name, m_default, m_vtype, m_hint, m_hint_string, m_group, m_action) \
 	void set_##m_name(m_type p_value);                                                              \
 	m_type get_##m_name() const { return m_name; }
@@ -73,6 +83,8 @@ protected:
 
 private:
 	Ref<EdenFoliageConfig> config;
+	Ref<Texture2D> biome_health_map;
+	float biome_health_cell = 0.05f;
 #define EDEN_F_MEMBER(m_type, m_name, m_default, m_vtype, m_hint, m_hint_string, m_group, m_action) m_type m_name = m_default;
 	EDEN_FOLIAGE_PROPERTIES(EDEN_F_MEMBER)
 #undef EDEN_F_MEMBER

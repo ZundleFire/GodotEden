@@ -262,6 +262,7 @@ Ref<ShaderMaterial> EdenFoliageMeshes::get_material(bool p_wind) {
 		s.static_material.instantiate();
 		s.static_material->set_shader(get_tree_shader());
 		s.static_material->set_shader_parameter("u_wind_strength", 0.0);
+		s.static_material->set_shader_parameter("u_living", false);
 	}
 	return s.static_material;
 }

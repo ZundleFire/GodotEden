@@ -4,6 +4,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/eden_weather.gdshaderinc"
 #include "res://shaders/eden_wind.gdshaderinc"
 #include "res://shaders/eden_season_globals.gdshaderinc"
+#include "res://shaders/eden_health.gdshaderinc"
 
 // Low-poly grass tufts spawned by EdenFoliage (VoxelInstancer MultiMesh).
 // Blades are single flat triangles; UV.y = 0 at the base, 1 at the tip.
@@ -49,6 +50,9 @@ void vertex() {
 	// coordinates ~40 km out)
 	float dist = length(MODELVIEW_MATRIX[3].xyz);
 	VERTEX *= 1.0 - smoothstep(u_fade_start, u_fade_end, dist);
+	// Poor biome health thins the grass (per tuft) and cools its colour
+	float health = eden_health_at(MODEL_MATRIX[3].xyz - eden_weather_planet.xyz);
+	VERTEX *= step(fract(sin(dot(MODEL_MATRIX[3].xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453), eden_health_keep(health));
 	// Buried by snow: tufts sink as it piles up (the terrain rises by the same depth)
 	vec4 weather = eden_weather_near(MODEL_MATRIX[3].xyz);
 	VERTEX.y -= weather.g * eden_weather_params.x * 1.6;
@@ -57,6 +61,7 @@ void vertex() {
 	vec3 gs = eden_grass_state_tropical(eden_grass_state(eden_season_here(MODEL_MATRIX[3].xyz, eden_weather_planet.xyz)),
 			eden_tropical_season(MODEL_MATRIX[3].xyz - eden_weather_planet.xyz, eden_calendar, eden_calendar_axis.xyz));
 	v_albedo = eden_seasonal_green(v_albedo, gs);
+	v_albedo = eden_health_tint(v_albedo, health);
 	VERTEX.y *= 1.0 - 0.3 * gs.x;
 	// (Lying snow, storms' and the season's, comes from the weather map below: tufts sink into it)
 	v_albedo = mix(v_albedo, eden_snow_color(), weather.g * h) * (1.0 - 0.9 * eden_weather_params.y * weather.b);
