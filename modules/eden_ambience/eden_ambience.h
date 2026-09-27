@@ -33,6 +33,9 @@ static inline PackedColorArray _eden_default_bolt_colors() {
 	X(float, white, 1.0f, PROPERTY_HINT_RANGE, "0.5,16.0,0.01", "Look")                                         \
 	X(float, contrast, 1.08f, PROPERTY_HINT_RANGE, "0.5,2.0,0.01", "Look")                                      \
 	X(float, ambient_strength, 0.5f, PROPERTY_HINT_RANGE, "0.0,1.0,0.01", "Look")                               \
+	X(float, starlight, 0.1f, PROPERTY_HINT_RANGE, "0.0,1.0,0.001", "Look")                                     \
+	X(float, moonlight, 0.35f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Look")                                      \
+	X(Color, night_ambient_color, Color(0.55f, 0.63f, 0.85f), PROPERTY_HINT_COLOR_NO_ALPHA, "", "Look")          \
 	X(float, saturation, 1.2f, PROPERTY_HINT_RANGE, "0.0,2.0,0.01", "Look")                                     \
 	X(bool, ssao_enabled, true, PROPERTY_HINT_NONE, "", "Look")                                                 \
 	X(float, ssao_intensity, 1.5f, PROPERTY_HINT_RANGE, "0.0,8.0,0.01", "Look")                                 \
@@ -206,6 +209,7 @@ private:
 	ObjectID fog_atmo; // atmosphere whose fog is being driven
 	Vector3 fog_saved; // its own density, height falloff, base altitude
 	float sun_energy_saved = 1.0f;
+	float moon_energy_saved = 0.4f;
 	Color fog_albedo_saved = Color(0.85f, 0.88f, 0.92f);
 	float fog_sun_saved = 0.9f;
 	Color fog_tint = Color(0, 0, 0, -1); // eased biome tint; alpha < 0 until the first update
@@ -299,7 +303,7 @@ private:
 	// set_external_weather() targets, and the eased values in use
 	float ext_intensity = 0.0f, ext_cloud = 0.0f, ext_fog = 0.0f;
 	bool ext_snow = false, ext_thunder = false;
-	float ext_intensity_now = 0.0f, ext_fog_now = 0.0f;
+	float ext_intensity_now = 0.0f, ext_fog_now = 0.0f, ext_cloud_now = 0.0f;
 	float forest_here = -1.0f; // forest density within ~25 m (< 0: no foliage node to ask)
 	float applied_exposure = -1.0f, applied_saturation = -1.0f;
 
