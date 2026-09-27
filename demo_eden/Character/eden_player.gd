@@ -101,6 +101,7 @@ var _intent := Vector3.ZERO
 ## Between the spring arm and the camera: lifts the camera clear of lying snow (the arm only sees solid ground)
 var _cam_lift: Node3D
 var _snow_lift := 0.0
+var _cam_anchor := Vector3.ZERO
 var _last_press: Variant = null
 var _steps: AudioStreamEdenAmbience
 var _steps_player: AudioStreamPlayer
@@ -144,6 +145,7 @@ func _ready() -> void:
 	# ~40 km from the origin a float resolves ~4 mm, coarser than the default 1 mm margin: the body couldn't
 	# separate from the floor to slide along it and stood still with every move blocked
 	safe_margin = 0.04
+	collision_mask |= EdenFoliage.COLLISION_LAYER # walk into trunks and rocks (the camera arm doesn't see them)
 	floor_snap_length = 0.4
 	floor_max_angle = deg_to_rad(50.0)
 	# Camera rig: a pivot above the character (planet-aligned, set every frame), a spring arm that pulls the
@@ -663,8 +665,9 @@ func _process(_delta: float) -> void:
 	# Camera: above the character, turned to the camera heading and pitched, aligned with the planet
 	# The camera follows where the body is drawn (interpolated between physics steps), not the physics position,
 	# which moves in 60 Hz steps: on a faster display the whole world shuddered against the character
-	var body := get_global_transform_interpolated().origin
-	var up := (body - _center()).normalized()
+	var up := (get_global_transform_interpolated().origin - _center()).normalized()
+	_cam_anchor = ease_anchor(_cam_anchor, get_global_transform_interpolated().origin, up, _delta)
+	var body := _cam_anchor
 	var heading := _north(up).rotated(up, _yaw)
 	_pivot.global_transform = Transform3D(Basis.looking_at(heading, up) * Basis(Vector3.RIGHT, _pitch),
 			body + up * _cam_height + heading.cross(up) * camera_shoulder)
@@ -714,3 +717,14 @@ static func press_snow_stroke(ambience: Node, last: Variant, at: Vector3, ground
 	if n == 0:
 		ambience.press_snow(at, 0.4, 1.0)
 	return at
+
+
+## Where the camera anchors to the body: exactly along the ground, eased along up. Physics contacts (the capsule
+## settling against terrain, rocks and trunks) shiver the body a few centimetres up and down every few steps; copied
+## straight into the camera that shook the whole view. A jump of more than 2 m (teleport, respawn) snaps.
+static func ease_anchor(anchor: Vector3, body: Vector3, up: Vector3, delta: float) -> Vector3:
+	var d := body - anchor
+	if d.length() > 2.0:
+		return body
+	var vertical := d.dot(up)
+	return anchor + (d - up * vertical) + up * vertical * (1.0 - exp(-delta * 12.0))

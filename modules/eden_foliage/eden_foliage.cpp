@@ -617,6 +617,7 @@ Ref<Resource> EdenFoliage::_item(const String &p_name, const Ref<Mesh> &p_mesh, 
 	if (!p_shapes.is_empty() && !Engine::get_singleton()->is_editor_hint()) { // no physics in the editor: bodies only cost time
 		item->set("collision_shapes", p_shapes);
 		item->set("collision_distance", collision_distance);
+		item->set("collision_layer", EDEN_FOLIAGE_COLLISION_LAYER);
 	}
 	if (p_draw_distance > 0.0f) {
 		_limit_draw_distance(item, p_draw_distance);
@@ -720,6 +721,7 @@ Ref<Resource> EdenFoliage::_grass_item(const String &p_name, const Ref<Resource>
 }
 
 void EdenFoliage::_bind_methods() {
+	ClassDB::bind_integer_constant(get_class_static(), StringName(), "COLLISION_LAYER", EDEN_FOLIAGE_COLLISION_LAYER);
 	ClassDB::bind_method(D_METHOD("set_config", "config"), &EdenFoliage::set_config);
 	ClassDB::bind_method(D_METHOD("get_config"), &EdenFoliage::get_config);
 	ClassDB::bind_method(D_METHOD("apply_quality", "values"), &EdenFoliage::apply_quality);

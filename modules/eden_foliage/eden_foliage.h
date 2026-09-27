@@ -18,6 +18,10 @@ class FastNoiseLite;
 // filter. The library is generated, never saved: it is detached around editor saves.
 //
 // X(type, name, default, variant type, hint, hint string, group, what a change does: REBUILD or MATERIALS)
+// Foliage colliders' physics layer (5): characters add it to their mask, cameras' spring arms and ground checks don't,
+// so trunks and rocks brushing past don't yank the camera in and out
+#define EDEN_FOLIAGE_COLLISION_LAYER (1 << 4)
+
 #define EDEN_FOLIAGE_PROPERTIES(X)                                                                                                        \
 	X(bool, show_in_editor, true, BOOL, PROPERTY_HINT_NONE, "", "", REBUILD)                                                             \
 	X(float, density_scale, 1.0f, FLOAT, PROPERTY_HINT_RANGE, "0.0,4.0,0.01", "", REBUILD)                                               \
