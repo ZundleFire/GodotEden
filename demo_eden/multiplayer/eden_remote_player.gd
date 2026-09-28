@@ -1,16 +1,16 @@
 class_name EdenRemotePlayer
 extends Node3D
-## Another player seen through EdenNet: the EDEN_Male model with the same procedural animator, gliding to the
+## Another player seen through EdenNet: the same character and animation tree as the local player, gliding to the
 ## position/facing the server last reported and animated from the reported state and speed. A name tag floats
-## above. Suits are tinted per player.
+## above.
 
-const MODEL := preload("res://Character/EDEN_Male.FBX")
+const MODEL := preload("res://Character/eden_character.tscn")
 
 var _planet: Node3D
 var _target := Vector3.ZERO
 var _yaw := 0.0
 var _has_target := false
-var _animator: EdenAnimator
+var _animator: EdenCharacterAnim
 var _label: Label3D
 
 
@@ -20,8 +20,7 @@ static func create(planet: Node3D) -> EdenRemotePlayer:
 	var model: Node3D = MODEL.instantiate()
 	model.rotation.y = PI # the rig faces +Z; the body's forward is -Z
 	r.add_child(model)
-	r._animator = EdenAnimator.new()
-	(model.find_children("*", "Skeleton3D", true, false)[0] as Skeleton3D).add_child(r._animator)
+	r._animator = model.get_node("AnimationTree")
 	r._label = Label3D.new()
 	r._label.position.y = 2.1
 	r._label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -39,8 +38,6 @@ func set_target(world_pos: Vector3, yaw: float, state: String, speed: float, pla
 	if not _has_target:
 		_has_target = true
 		global_position = world_pos
-		var hue := float(hash(player_name) % 360) / 360.0
-		EdenPlayer.apply_look(get_child(0), Color.from_hsv(hue, 0.45, 0.6), Color(0.8, 0.88, 0.95))
 	_label.text = player_name
 	_animator.ground_speed = speed
 	_animator.crouching = state.begins_with("crouch")

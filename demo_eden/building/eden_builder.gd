@@ -101,29 +101,33 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not active:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		var k: int = event.physical_keycode
-		if k >= KEY_0 and k <= KEY_9:
-			select(9 if k == KEY_0 else k - KEY_1)
-	if event.is_action_pressed("build_rotate"):
+	# Only what building uses is consumed: mouse motion (camera look), movement and the other keys pass on
+	var used := true
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode >= KEY_0 and event.physical_keycode <= KEY_9:
+		select(9 if event.physical_keycode == KEY_0 else event.physical_keycode - KEY_1)
+	elif event.is_action_pressed("build_rotate"):
 		_rotation += PI / 2.0
-	if event.is_action_pressed("build_remove"):
+	elif event.is_action_pressed("build_remove"):
 		remove_target()
-	if event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_WHEEL_UP:
-				_rotation += ROTATE_STEP
-			MOUSE_BUTTON_WHEEL_DOWN:
-				_rotation -= ROTATE_STEP
-			MOUSE_BUTTON_RIGHT:
-				_menu.visible = not _menu.visible
-				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _menu.visible else Input.MOUSE_MODE_CAPTURED
-			MOUSE_BUTTON_MIDDLE:
-				remove_target()
-			MOUSE_BUTTON_LEFT:
-				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not _menu.visible:
-					place()
-	get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		if event.pressed:
+			match event.button_index:
+				MOUSE_BUTTON_WHEEL_UP:
+					_rotation += ROTATE_STEP
+				MOUSE_BUTTON_WHEEL_DOWN:
+					_rotation -= ROTATE_STEP
+				MOUSE_BUTTON_RIGHT:
+					_menu.visible = not _menu.visible
+					Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _menu.visible else Input.MOUSE_MODE_CAPTURED
+				MOUSE_BUTTON_MIDDLE:
+					remove_target()
+				MOUSE_BUTTON_LEFT:
+					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not _menu.visible:
+						place()
+	else:
+		used = false
+	if used:
+		get_viewport().set_input_as_handled()
 
 
 func _process(_delta: float) -> void:
