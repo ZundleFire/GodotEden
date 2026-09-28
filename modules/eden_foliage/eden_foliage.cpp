@@ -3,6 +3,8 @@
 #include "eden_foliage_meshes.h"
 
 #include "core/config/engine.h"
+#include "core/io/image.h"
+#include "scene/3d/physics/collision_object_3d.h"
 #include "core/os/time.h"
 #include "modules/noise/fastnoise_lite.h"
 #include "modules/voxel/terrain/instancing/voxel_instance_generator.h"
@@ -118,6 +120,68 @@ void EdenFoliage::set_biome_health_map(const Ref<Texture2D> &p_map) {
 	_update_materials();
 }
 
+namespace {
+
+// The plant shader's hash13 (eden_tree_lowpoly.gdshader), in the same float steps so CPU and GPU agree
+float hash13(Vector3 p) {
+	auto fr = [](float x) { return x - Math::floor(x); };
+	p = Vector3(fr(p.x * 0.1031f), fr(p.y * 0.1030f), fr(p.z * 0.0973f));
+	const float d = p.x * (p.y + 33.33f) + p.y * (p.z + 33.33f) + p.z * (p.x + 33.33f);
+	p += Vector3(d, d, d);
+	return fr((p.x + p.y) * p.z);
+}
+
+// eden_health_keep(): the share of a stand still standing at a health
+float health_keep(float h) {
+	const float t = CLAMP((h - 0.05f) / 0.6f, 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+}
+
+} // namespace
+
+float EdenFoliage::health_at(const Vector3 &p_dir) const {
+	if (biome_health_image.is_null() || biome_health_image->is_empty() || biome_health_map.is_null()) {
+		return 1.0f;
+	}
+	// As eden_health_at(): lat/lon cell grid, bilinear with repeat
+	const Vector3 n = p_dir.normalized();
+	const float lat = Math::asin(CLAMP(n.y, -1.0f, 1.0f));
+	const float lon = Math::atan2(n.x, n.z);
+	const int w = biome_health_image->get_width();
+	const int h = biome_health_image->get_height();
+	const float u = (lon + Math::PI) / biome_health_cell / float(w);
+	const float v = (lat / biome_health_cell + float(h) * 0.5f) / float(h);
+	const float fx = u * w - 0.5f, fy = v * h - 0.5f;
+	const int x0 = int(Math::floor(fx)), y0 = int(Math::floor(fy));
+	const float tx = fx - x0, ty = fy - y0;
+	auto px = [&](int x, int y) { return biome_health_image->get_pixel(Math::posmod(x, w), Math::posmod(y, h)).r; };
+	return Math::lerp(Math::lerp(px(x0, y0), px(x0 + 1, y0), tx), Math::lerp(px(x0, y0 + 1), px(x0 + 1, y0 + 1), tx), ty);
+}
+
+bool EdenFoliage::is_plant_kept(const Vector3 &p_world_position, const Vector3 &p_planet_centre) const {
+	return hash13(p_world_position + Vector3(0.37f, 0.37f, 0.37f)) <= health_keep(health_at(p_world_position - p_planet_centre));
+}
+
+// Plants the shader thinned out lose their colliders (and get them back when health returns)
+void EdenFoliage::_update_thinned_colliders() {
+	Node3D *terrain = _terrain();
+	const Vector3 centre = terrain != nullptr ? terrain->get_global_position() : Vector3();
+	const bool thinning = biome_health_image.is_valid() && biome_health_map.is_valid();
+	for (int i = 0; i < get_child_count(); i++) {
+		CollisionObject3D *body = Object::cast_to<CollisionObject3D>(get_child(i));
+		if (body == nullptr || !body->has_method("get_library_item_id")) {
+			continue;
+		}
+		const int kind = item_kinds.get(int(body->call("get_library_item_id")), -1);
+		const bool living = kind >= 0 && !(kind >= L::PEBBLES && kind <= L::ROCK_SPIRE) && kind != L::BRANCH && kind != L::LOG;
+		const bool kept = !thinning || !living || is_plant_kept(body->get_global_position(), centre);
+		const uint32_t layer = kept ? uint32_t(EDEN_FOLIAGE_COLLISION_LAYER) : 0u;
+		if (body->get_collision_layer() != layer) {
+			body->set_collision_layer(layer);
+		}
+	}
+}
+
 void EdenFoliage::set_biome_health_cell(float p_cell) {
 	biome_health_cell = MAX(p_cell, 1e-4f);
 	_update_materials();
@@ -200,6 +264,10 @@ void EdenFoliage::_notification(int p_what) {
 				if (now >= retired[i].until_ms) {
 					retired.remove_at(i);
 				}
+			}
+			if (!Engine::get_singleton()->is_editor_hint() && now >= next_thin_ms) {
+				next_thin_ms = now + 250;
+				_update_thinned_colliders();
 			}
 			if (!Engine::get_singleton()->is_editor_hint() || now < next_check_ms) {
 				break;
@@ -329,8 +397,8 @@ Ref<VoxelInstanceLibrary> EdenFoliage::build_library() {
 					const bool dec = deciduous(layer->kind);
 					if (far) { // exact per-instance cut where the far tiers take over (chunks only cut coarsely)
 						item->set("material_override", _ring_material(layer->sways(), 0.0f, dd, dec));
-					} else if (layer->sways() && !dec) {
-						item->set("material_override", _ring_material(true, 0.0f, 1e9f, false));
+					} else if (layer->sways() || dec) { // (seasonal plants need u_deciduous: the shared material has it off)
+						item->set("material_override", _ring_material(layer->sways(), 0.0f, 1e9f, dec));
 					}
 					_add_detail_lods(item, layer, v, dd > 0.0f ? dd : _lod_range(layer->lod) * 2.0f);
 				}
@@ -722,6 +790,11 @@ Ref<Resource> EdenFoliage::_grass_item(const String &p_name, const Ref<Resource>
 
 void EdenFoliage::_bind_methods() {
 	ClassDB::bind_integer_constant(get_class_static(), StringName(), "COLLISION_LAYER", EDEN_FOLIAGE_COLLISION_LAYER);
+	ClassDB::bind_method(D_METHOD("set_biome_health_image", "image"), &EdenFoliage::set_biome_health_image);
+	ClassDB::bind_method(D_METHOD("get_biome_health_image"), &EdenFoliage::get_biome_health_image);
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "biome_health_image", PROPERTY_HINT_RESOURCE_TYPE, "Image", PROPERTY_USAGE_NONE), "set_biome_health_image", "get_biome_health_image");
+	ClassDB::bind_method(D_METHOD("health_at", "direction"), &EdenFoliage::health_at);
+	ClassDB::bind_method(D_METHOD("is_plant_kept", "world_position", "planet_centre"), &EdenFoliage::is_plant_kept);
 	ClassDB::bind_method(D_METHOD("set_config", "config"), &EdenFoliage::set_config);
 	ClassDB::bind_method(D_METHOD("get_config"), &EdenFoliage::get_config);
 	ClassDB::bind_method(D_METHOD("apply_quality", "values"), &EdenFoliage::apply_quality);

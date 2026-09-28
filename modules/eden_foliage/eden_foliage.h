@@ -64,6 +64,14 @@ public:
 	Ref<Texture2D> get_biome_health_map() const { return biome_health_map; }
 	void set_biome_health_cell(float p_cell);
 	float get_biome_health_cell() const { return biome_health_cell; }
+	// The same health as an Image (kept by reference: whoever updates the map updates this in place). With it, plants
+	// the shader thins out also lose their colliders -- else the player bumps into invisible trees.
+	void set_biome_health_image(const Ref<Image> &p_image) { biome_health_image = p_image; }
+	Ref<Image> get_biome_health_image() const { return biome_health_image; }
+	// Health 0..1 at a direction from the planet centre, as the shader samples it (1 without an image)
+	float health_at(const Vector3 &p_dir) const;
+	// Whether the shader draws the living plant standing at a world position (biome health thinning)
+	bool is_plant_kept(const Vector3 &p_world_position, const Vector3 &p_planet_centre) const;
 
 #define EDEN_F_DECL(m_type, m_name, m_default, m_vtype, m_hint, m_hint_string, m_group, m_action) \
 	void set_##m_name(m_type p_value);                                                              \
@@ -88,7 +96,10 @@ protected:
 private:
 	Ref<EdenFoliageConfig> config;
 	Ref<Texture2D> biome_health_map;
+	Ref<Image> biome_health_image;
 	float biome_health_cell = 0.05f;
+	uint64_t next_thin_ms = 0;
+	void _update_thinned_colliders();
 #define EDEN_F_MEMBER(m_type, m_name, m_default, m_vtype, m_hint, m_hint_string, m_group, m_action) m_type m_name = m_default;
 	EDEN_FOLIAGE_PROPERTIES(EDEN_F_MEMBER)
 #undef EDEN_F_MEMBER

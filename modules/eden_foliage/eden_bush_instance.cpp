@@ -298,6 +298,7 @@ void EdenBushInstance::_rebuild() {
 	if (fruit_mesh.is_valid() && fruit_mesh->get_surface_count() > 0) {
 		if (_fruit_inst == nullptr) {
 			_fruit_inst = memnew(MeshInstance3D);
+			_fruit_inst->set_name("Fruit"); // (EdenFoliageMeshes tags its faces as fruit by this)
 			_fruit_mat.instantiate();
 			_fruit_mat->set_roughness(0.5f);
 			_fruit_inst->set_material_override(_fruit_mat);

@@ -67,6 +67,17 @@ void vertex() {
 		v_leaf = face;
 		v_fallen = ls.y * (1.0 - u_winter_leaves);
 	}
+	// Fruit (vertex alpha 0.5): away from the tropics it ripens from early summer and is gone by mid autumn (none in
+	// winter or spring); in the tropics, where summer and winter are barely felt, it follows the wet season instead
+	if (u_deciduous && COLOR.a < 0.75 && eden_calendar.w > 0.5) {
+		vec3 rel = MODEL_MATRIX[3].xyz - eden_weather_planet.xyz;
+		vec2 season = eden_season_here(MODEL_MATRIX[3].xyz, eden_weather_planet.xyz);
+		float temperate = smoothstep(0.26, 0.34, season.x) * (1.0 - smoothstep(0.58, 0.68, season.x));
+		float tropical = smoothstep(-0.3, 0.2, eden_tropical_season(rel, eden_calendar, eden_calendar_axis.xyz));
+		float on = mix(tropical, temperate, smoothstep(0.1, 0.4, season.y));
+		v_leaf = hash13(VERTEX * 5.17 + MODEL_MATRIX[3].xyz * 0.01);
+		v_fallen = 1.0 - on;
+	}
 	v_albedo = eden_health_tint(v_albedo, health);
 	v_albedo *= 1.0 - 0.75 * eden_weather_params.y * weather.b;
 	if (weather.g > 0.0) {

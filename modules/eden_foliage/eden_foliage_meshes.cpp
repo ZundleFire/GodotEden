@@ -221,7 +221,11 @@ Ref<ArrayMesh> harvest_bush(EdenBushInstance *p_node, bool p_wind) {
 			continue;
 		}
 		Ref<BaseMaterial3D> mat = mi->get_material_override();
-		parts.push_back(eden_array(mi->get_mesh(), mat.is_valid() ? mat->get_albedo() : Color(0.5, 0.5, 0.5)));
+		Color c = mat.is_valid() ? mat->get_albedo() : Color(0.5, 0.5, 0.5);
+		if (mi->get_name() == StringName("Fruit")) {
+			c.a = 0.5; // tags fruit for the plant shader (seasonal fruit)
+		}
+		parts.push_back(eden_array(mi->get_mesh(), c));
 	}
 	memdelete(p_node);
 	return EdenFoliageMeshes::merge(parts, p_wind);
@@ -400,7 +404,11 @@ Dictionary EdenFoliageMeshes::tree(int p_tree_type, int p_season, int p_variant)
 	for (const auto &k : keys) {
 		const Variant m = built.get(k[0], Variant());
 		if (m.get_type() != Variant::NIL) {
-			parts.push_back(eden_array(m, built.get(k[1], Color(1, 0, 1))));
+			Color c = built.get(k[1], Color(1, 0, 1));
+			if (String(k[0]) == "fruit_mesh") {
+				c.a = 0.5; // tags fruit for the plant shader (seasonal fruit)
+			}
+			parts.push_back(eden_array(m, c));
 		}
 	}
 	Dictionary out;
