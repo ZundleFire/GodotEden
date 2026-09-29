@@ -83,12 +83,21 @@ static func apply_world(world: Node, world_seed: int, show_parent := true) -> vo
 	if rings:
 		rings.set("ring_seed", b.ring_seed)
 	if space:
-		# No folder scan (it would load the first panorama just to replace it): pick one and load only that
-		space.set("space_texture_dir", "")
-		space.set("use_placeholder_panorama", false)
 		var files := _panoramas()
 		if not files.is_empty():
-			space.set("space_panorama", load(files[b.panorama % files.size()]))
+			# No folder scan (it would load the first panorama just to replace it): pick one and load only that. The
+			# node rescans its (now empty) folder when it enters the tree and would clear a panorama set before, so
+			# it goes on after that.
+			var tex := load(files[b.panorama % files.size()])
+			space.set("space_texture_dir", "")
+			space.set("use_placeholder_panorama", false)
+			var put := func():
+				space.call("rescan_panoramas")
+				space.set("space_panorama", tex)
+			if space.is_node_ready():
+				put.call()
+			else:
+				space.ready.connect(put, CONNECT_ONE_SHOT)
 
 
 ## A body's painter under the world with this look (the one from an earlier apply_world, repainted)

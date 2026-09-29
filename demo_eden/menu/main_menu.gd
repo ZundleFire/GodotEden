@@ -28,6 +28,11 @@ const PLAY_SCENE := "res://eden_play.tscn"
 @export var roll := -0.68
 @export var sway := 0.06
 @export var sway_speed := 0.05
+## The terrain's LOD distance in the menu. The camera is ~120 km out: at the scene's 128 m it meshes the planet from
+## ~1 km voxels, and coastal sea floor pokes through the ocean. Measured (menu/_menu_capture.gd --lod=, GTX 750 Ti,
+## 1080p, settled): 128 -> 13.2 ms/frame; 1024 -> 14.7 ms, detail like the finest; 512 keeps hitching (up to 300 ms)
+## as the camera's sway moves a LOD boundary across the planet.
+@export var terrain_lod_distance := 1024.0
 @export var ring_tint := Color(0.82, 0.9, 1.0)
 @export var ring_opacity := 0.75
 
@@ -90,6 +95,7 @@ func _build_world() -> void:
 		gen.seed = menu_seed
 		_terrain.set("generator", gen)
 	EdenSkyBodies.apply_world(world, menu_seed, false)
+	_terrain.set("lod_distance", terrain_lod_distance)
 	add_child(world)
 	for n in world.find_children("*", "EdenGraphics", true, false):
 		_graphics = n
@@ -104,6 +110,8 @@ func _build_world() -> void:
 		a.set("moon_intensity", 0.65)
 		a.set("moon_tint", Color(1.0, 0.97, 0.92))
 		a.set("moon_glow_intensity", 0.0)
+		# Stars are hidden out to 6x the glow's size round the moon (for its glow); with no glow, only under the disc
+		a.set("moon_glow_size", moon_angular_radius / 6.0)
 		a.set("moon_ray_intensity", 0.0)
 	camera = get_node_or_null("MenuCamera")
 	if camera == null:
