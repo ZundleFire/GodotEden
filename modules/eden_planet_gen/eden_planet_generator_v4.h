@@ -84,6 +84,11 @@ public:
 		float biome_contrast = 0.6f;
 		float ridge_rock_strength = 0.8f;
 		float gully_sediment_strength = 0.6f;
+		// Whole-world climate, added to every point's temperature / moisture (0..1): colder or hotter, drier or wetter
+		// worlds (the game's world settings). Everything reading climate from the generator follows: biomes,
+		// materials, snow, foliage, weather.
+		float temperature_offset = 0.0f;
+		float moisture_offset = 0.0f;
 	};
 
 	Result generate_block(VoxelQueryData input) override;

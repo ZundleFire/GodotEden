@@ -13,7 +13,7 @@ func _initialize() -> void:
 		if a.begins_with("--out="):
 			out = a.trim_prefix("--out=")
 		elif a.begins_with("--seed="):
-			EdenSession.play_offline(int(a.trim_prefix("--seed=")))
+			EdenSession.play_offline("Sky capture", int(a.trim_prefix("--seed=")))
 	DirAccess.make_dir_recursive_absolute(out)
 	play = load("res://eden_play.tscn").instantiate()
 	root.add_child(play)
@@ -85,11 +85,25 @@ func _run() -> void:
 	if "--all-styles" in OS.get_cmdline_user_args():
 		var d: Vector3 = (parent.get("parent_planet_direction") as Vector3).normalized()
 		cam.look_at(cam.global_position + d, up)
-		for st in range(1, 8):
-			parent.set("parent_planet_style", st)
-			await _seconds(0.6)
+		parent.set("parent_planet_enabled", true)
+		parent.set("parent_planet_style", 0)
+		parent.set("parent_planet_shade_bands", 1)
+		for st in range(1, EdenSkyBodies.PLANET_STYLES.size()):
+			var look: Dictionary = EdenSkyBodies.PLANET_LOOKS[st].merged(EdenSkyBodies.PARENT_COMMON)
+			look.planet_seed = 123.0
+			var painter := EdenSkyBodies._painter(play.get_child(0), "parent", EdenSkyBodies.PARENT_MAP, look)
+			parent.set("parent_planet_texture", painter.get_texture())
+			await _seconds(0.8)
 			root.get_viewport().get_texture().get_image().save_png(out.path_join("parent_style_%d.png" % st))
-			print("SKY shot parent style ", st)
+			painter.get_texture().get_image().save_png(out.path_join("parent_map_%d.png" % st))
+			print("SKY shot parent style ", st, " ", EdenSkyBodies.PLANET_STYLES[st])
+		for st in range(1, EdenSkyBodies.MOON_STYLES.size()):
+			var look: Dictionary = EdenSkyBodies.MOON_LOOKS[st].merged(EdenSkyBodies.MOON_COMMON)
+			look.planet_seed = 321.0
+			var painter := EdenSkyBodies._painter(play.get_child(0), "moon", EdenSkyBodies.MOON_MAP, look)
+			await _seconds(0.3)
+			painter.get_texture().get_image().save_png(out.path_join("moon_map_%d.png" % st))
+			print("SKY moon map ", st, " ", EdenSkyBodies.MOON_STYLES[st])
 		quit(0)
 		return
 	for target in [["parent", parent.get("parent_planet_direction")], ["moon", atmo.get("moon_direction")], ["moonb", atmo.get("moonb_direction")]]:

@@ -168,8 +168,8 @@ func ensure_token(server: String) -> String:
 	return tok
 
 
-## The worlds a server lists: [{database, name, seed, host, online}] (online: players in it now). Empty if the
-## server doesn't answer or has no lobby.
+## The worlds a server lists: [{database, name, seed, host, online, players, settings}] (online: players in it now;
+## settings from the world's own world_meta, EdenWorldSettings). Empty if the server doesn't answer or has no lobby.
 func list_worlds(server: String) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var rows = await sql(server, LOBBY, "SELECT * FROM world_listing")
@@ -183,16 +183,20 @@ func list_worlds(server: String) -> Array[Dictionary]:
 		for p in players: # identity name online ...
 			if p[2]:
 				online += 1
-		out.append({"database": str(row[0]), "name": str(row[1]), "seed": int(row[2]), "host": str(row[3]), "online": online, "players": players.size()})
+		var meta := await world_meta(server, str(row[0]))
+		out.append({"database": str(row[0]), "name": str(row[1]), "seed": int(row[2]), "host": str(row[3]), "online": online,
+				"players": players.size(), "settings": meta.get("settings", EdenWorldSettings.DEFAULTS)})
 	return out
 
 
-## A world's name and seed from its world_meta ({} if it has none)
+## A world's name, seed and settings from its world_meta ({} if it has none). Worlds made before world settings
+## have no settings column: the defaults.
 func world_meta(server: String, db: String) -> Dictionary:
 	var rows = await sql(server, db, "SELECT * FROM world_meta")
 	if rows == null or rows.is_empty():
 		return {}
-	return {"name": str(rows[0][1]), "seed": int(rows[0][2])}
+	var row: Array = rows[0] # id name seed owner created_at settings
+	return {"name": str(row[1]), "seed": int(row[2]), "settings": EdenWorldSettings.from_json(str(row[5]) if row.size() > 5 else "")}
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -243,7 +247,8 @@ func _publish(db: String) -> String:
 
 
 ## Creates a world on this computer. Returns {database} or {error}.
-func host_world(world_name: String, world_seed: int, host_name: String, lan := false) -> Dictionary:
+func host_world(world_name: String, world_seed: int, host_name: String, lan := false,
+		settings := EdenWorldSettings.DEFAULTS) -> Dictionary:
 	var err := await ensure_local_server(lan)
 	if err != "":
 		return {"error": err}
@@ -256,7 +261,7 @@ func host_world(world_name: String, world_seed: int, host_name: String, lan := f
 	err = _publish(db)
 	if err != "":
 		return {"error": err}
-	if not await call_reducer(server, db, "create_world", [world_name, world_seed]):
+	if not await call_reducer(server, db, "create_world", [world_name, world_seed, JSON.stringify(EdenWorldSettings.normalized(settings))]):
 		return {"error": "Couldn't set the world up"}
 	await call_reducer(server, LOBBY, "list_world", [db, world_name, world_seed, EdenOptions.valid_name(host_name)])
 	return {"database": db}

@@ -53,6 +53,13 @@ func _run() -> void:
 		if b == "OPTIONS":
 			menu._options.close()
 		else:
+			for play in menu.find_children("*", "EdenPlayScreen", true, false):
+				play._show_form(play._host_form, true)
+				await _seconds(0.4)
+				_shot("play_single_player")
+				play._show_form(play._host_form, false)
+				await _seconds(0.4)
+				_shot("play_host")
 			menu._set_screen(null)
 		await _seconds(0.3)
 	quit(0)

@@ -67,8 +67,9 @@ public static partial class Module
         public double days_per_second;
     }
 
-    // What this world is (one row, id 0): its name, the planet generator's seed and who created it. Set once by
-    // create_world, right after the host publishes the database.
+    // What this world is (one row, id 0): its name, the planet generator's seed, its settings (the game's
+    // EdenWorldSettings as JSON: template, temperature, rainfall; one text column so new options need no schema
+    // change) and who created it. Set once by create_world, right after the host publishes the database.
     [Table(Accessor = "world_meta", Public = true)]
     public partial struct WorldMeta
     {
@@ -78,6 +79,7 @@ public static partial class Module
         public long seed;
         public Identity owner;
         public Timestamp created_at;
+        public string settings;
     }
 
     // A player's inventory: item counts in the game's EdenMiner.ITEMS order. Kept between sessions like the
@@ -233,9 +235,9 @@ public static partial class Module
         ctx.Db.build_piece.id.Delete(id);
     }
 
-    // Names the world and fixes its seed. Only the first call counts (the host's, right after publishing).
+    // Names the world and fixes its seed and settings. Only the first call counts (the host's, right after publishing).
     [Reducer]
-    public static void create_world(ReducerContext ctx, string name, long seed)
+    public static void create_world(ReducerContext ctx, string name, long seed, string settings)
     {
         if (ctx.Db.world_meta.id.Find(0) is not null)
         {
@@ -246,7 +248,11 @@ public static partial class Module
         {
             throw new System.Exception("World names are 1-40 characters");
         }
-        ctx.Db.world_meta.Insert(new WorldMeta { id = 0, name = name, seed = seed, owner = ctx.Sender, created_at = ctx.Timestamp });
+        if (settings.Length > 1024)
+        {
+            throw new System.Exception("World settings are at most 1024 characters");
+        }
+        ctx.Db.world_meta.Insert(new WorldMeta { id = 0, name = name, seed = seed, owner = ctx.Sender, created_at = ctx.Timestamp, settings = settings });
     }
 
     const int MaxItems = 16;

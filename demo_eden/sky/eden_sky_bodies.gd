@@ -6,8 +6,39 @@ class_name EdenSkyBodies
 ##     5 tropical, 6 tundral, 7 wetlands
 ##   Moons (EdenPlanetAtmosphere.moon_style / moonb_style): 1 rock, 2 ice, 3 rust
 
-const PLANET_STYLES := ["", "gas giant", "primordial", "ocean", "terrestrial", "tropical", "tundral", "wetlands"]
+const PLANET_STYLES := ["", "gas giant", "primordial", "ocean", "terrestrial", "tropical", "tundral", "wetlands",
+		"ice giant", "greenhouse"]
 const MOON_STYLES := ["", "rock", "ice", "rust"]
+## Each style as universal planet shader settings (planet_type: 0 Terran, 1 Gas Giant, 2 Ocean World, 3 Ice / Plutoid,
+## 4 Barren Rock, 5 Runaway Greenhouse, 6 Lava World, 7 Ice Giant). life_level stays at or under 0.5: no cities.
+const PLANET_LOOKS := {
+	1: {"planet_type": 1},
+	2: {"planet_type": 6, "atmosphere_density": 0.35, "ocean_coverage": 0.12},
+	3: {"planet_type": 2, "temperature": 0.55, "life_level": 0.3},
+	4: {"planet_type": 0, "temperature": 0.62, "ocean_coverage": 0.5, "life_level": 0.5, "lat_gradient": 0.6},
+	5: {"planet_type": 0, "temperature": 0.78, "ocean_coverage": 0.6, "life_level": 0.5, "cloud_coverage": 0.65},
+	6: {"planet_type": 0, "temperature": 0.12, "ocean_coverage": 0.4, "life_level": 0.2, "cloud_coverage": 0.4},
+	7: {"planet_type": 0, "temperature": 0.66, "ocean_coverage": 0.72, "life_level": 0.5, "cloud_coverage": 0.7,
+		"lat_gradient": 0.6},
+	8: {"planet_type": 7},
+	9: {"planet_type": 5},
+}
+## Moons are airless and tidally locked (no spin, no polar ice from latitude)
+const MOON_LOOKS := {
+	1: {"planet_type": 4, "land_low": Color(0.28, 0.28, 0.28), "land_high": Color(0.62, 0.61, 0.6),
+		"desert_color": Color(0.5, 0.5, 0.5), "crater_amount": 0.9},
+	2: {"planet_type": 3},
+	# (an airless, dry Terran: Barren Rock would desaturate the rust; airless Terran still gets craters)
+	3: {"planet_type": 0, "ocean_coverage": 0.0, "atmosphere_density": 0.0, "life_level": 0.0,
+		"land_low": Color(0.42, 0.13, 0.06), "land_high": Color(0.85, 0.42, 0.22), "desert_color": Color(0.78, 0.33, 0.14),
+		"crater_amount": 0.7},
+}
+const MOON_COMMON := {"rotation_speed": 0.0, "temperature": 0.6, "lat_gradient": 0.0}
+## The parent planet turns slowly
+const PARENT_COMMON := {"rotation_speed": 0.01, "wildfire_activity": 0.1}
+## Map widths (height is half). The parent planet fills a big piece of sky, so it needs the detail.
+const PARENT_MAP := 2048
+const MOON_MAP := 256
 const PANORAMA_DIR := "res://Panoramics"
 
 
@@ -17,7 +48,7 @@ static func world_bodies(world_seed: int) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(world_seed * 7919 + 17)
 	return {
-		"planet": rng.randi_range(1, 7), "planet_seed": float(rng.randi() % 1000),
+		"planet": rng.randi_range(1, PLANET_STYLES.size() - 1), "planet_seed": float(rng.randi() % 1000),
 		"moon": rng.randi_range(1, 3), "moon_seed": float(rng.randi() % 1000),
 		"moonb": rng.randi_range(1, 3), "moonb_seed": float(rng.randi() % 1000),
 		"ring_seed": float(rng.randi() % 1000), "panorama": rng.randi(),
@@ -33,18 +64,22 @@ static func apply_world(world: Node, world_seed: int, show_parent := true) -> vo
 	var parent_planet := _first(world, "EdenParentPlanet")
 	var rings := _first(world, "EdenPlanetRings")
 	var space := _first(world, "EdenSpaceEnvironment")
+	# Surfaces painted by the universal planet shader (EdenBodyPainter) into maps the sky wraps on each body
 	if atmosphere:
-		atmosphere.set("moon_texture", null)
-		atmosphere.set("moon_style", b.moon)
-		atmosphere.set("moon_style_seed", b.moon_seed)
-		atmosphere.set("moonb_texture", null)
-		atmosphere.set("moonb_style", b.moonb)
-		atmosphere.set("moonb_style_seed", b.moonb_seed)
+		for m in ["moon", "moonb"]:
+			var look: Dictionary = MOON_LOOKS[b[m]].merged(MOON_COMMON)
+			look.planet_seed = b[m + "_seed"]
+			atmosphere.set(m + "_style", 0)
+			atmosphere.set(m + "_texture_equirect", true)
+			atmosphere.set(m + "_texture", _painter(world, m, MOON_MAP, look).get_texture())
 	if parent_planet:
-		parent_planet.set("parent_planet_texture", null)
-		parent_planet.set("parent_planet_style", b.planet)
-		parent_planet.set("parent_planet_seed", b.planet_seed)
 		parent_planet.set("parent_planet_enabled", show_parent)
+		if show_parent: # (not painted when hidden)
+			var look: Dictionary = PLANET_LOOKS[b.planet].merged(PARENT_COMMON)
+			look.planet_seed = b.planet_seed
+			parent_planet.set("parent_planet_style", 0)
+			parent_planet.set("parent_planet_shade_bands", 1) # (the posterised light is for the old pixel-art surface)
+			parent_planet.set("parent_planet_texture", _painter(world, "parent", PARENT_MAP, look).get_texture())
 	if rings:
 		rings.set("ring_seed", b.ring_seed)
 	if space:
@@ -54,6 +89,21 @@ static func apply_world(world: Node, world_seed: int, show_parent := true) -> vo
 		var files := _panoramas()
 		if not files.is_empty():
 			space.set("space_panorama", load(files[b.panorama % files.size()]))
+
+
+## A body's painter under the world with this look (the one from an earlier apply_world, repainted)
+static func _painter(world: Node, body: String, width: int, look: Dictionary) -> EdenBodyPainter:
+	var node_name := "Painter_" + body
+	var p := world.get_node_or_null(node_name) as EdenBodyPainter
+	if p:
+		p.set_look(look)
+		return p
+	p = EdenBodyPainter.create(width, look)
+	if body != "parent":
+		p.refresh_interval = 0.0 # (airless, tidally locked: nothing on a moon moves)
+	p.name = node_name
+	world.add_child(p)
+	return p
 
 
 static func _first(world: Node, type: String) -> Node:

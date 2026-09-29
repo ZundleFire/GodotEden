@@ -186,6 +186,12 @@ void compute_climate(const Parameters &p, const float *x, const float *y, const 
 	cp.planet_radius = p.planet_radius;
 	terrain_climate_3d_series(x, y, z, b.radial.data(), b.temperature.data(), b.moisture.data(),
 			b.normalized_height.data(), count, cp);
+	if (p.temperature_offset != 0.0f || p.moisture_offset != 0.0f) {
+		for (unsigned int i = 0; i < count; ++i) {
+			b.temperature[i] = CLAMP(b.temperature[i] + p.temperature_offset, 0.0f, 1.0f);
+			b.moisture[i] = CLAMP(b.moisture[i] + p.moisture_offset, 0.0f, 1.0f);
+		}
+	}
 
 	terrain_material_blend_series(b.normalized_height.data(), b.temperature.data(), b.moisture.data(), b.zeros.data(),
 			b.biome.data(), b.ocean.data(), b.coast.data(), b.river.data(), b.vegetation.data(), b.desert.data(),
@@ -707,6 +713,8 @@ const PropDef g_prop_defs[] = {
 	V4_PROP(biome_contrast, PK_FLOAT, "0,1,0.01"),
 	V4_PROP(ridge_rock_strength, PK_FLOAT, "0,2,0.01"),
 	V4_PROP(gully_sediment_strength, PK_FLOAT, "0,2,0.01"),
+	V4_PROP(temperature_offset, PK_FLOAT, "-1,1,0.01"),
+	V4_PROP(moisture_offset, PK_FLOAT, "-1,1,0.01"),
 };
 
 #undef V4_GROUP

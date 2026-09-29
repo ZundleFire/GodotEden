@@ -56,7 +56,9 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_build_world()
 	_build_ui()
-	EdenMusic.play_menu()
+	var music := get_node_or_null("/root/EdenMusic")
+	if music:
+		music.play_menu()
 
 
 # ------------------------------------------------------------------------------------------------------------

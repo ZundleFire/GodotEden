@@ -1,8 +1,9 @@
 class_name EdenPlayScreen
 extends PanelContainer
 ## The main menu's Play screen: SpacetimeDB servers on the left (this computer + added ones), the worlds the
-## selected server lists on the right. Join a world, host a new one on this computer (name, seed, open to the
-## LAN), delete one of yours, add or remove a server, or play the offline sandbox (not saved).
+## selected server lists on the right (with their template and climate). Join a world, host a new one on this
+## computer (name, seed, world settings, open to the LAN), delete one of yours, add or remove a server, or start a
+## single-player world with the same settings (played offline, not saved).
 ## Worlds are saved by SpacetimeDB as they are played: rejoining one puts you back where you left, with your
 ## inventory, the buildings and the dug terrain.
 
@@ -20,7 +21,13 @@ var _host_form: Control
 var _server_form: Control
 var _host_name: LineEdit
 var _host_seed: LineEdit
+## World setting key -> its OptionButton
+var _host_settings := {}
 var _host_lan: CheckButton
+var _host_lan_label: Label
+var _host_create: Button
+## The form makes a single-player world (played offline) instead of hosting one
+var _single_player := false
 var _server_name: LineEdit
 var _server_address: LineEdit
 var _server_list: Array[Dictionary] = []
@@ -91,13 +98,11 @@ func _ready() -> void:
 	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
 	bottom.add_theme_constant_override("separation", 24)
 	box.add_child(bottom)
-	var offline := Button.new()
-	offline.text = "OFFLINE SANDBOX"
-	offline.tooltip_text = "Play without a server. Nothing is saved."
-	offline.pressed.connect(func():
-		EdenSession.play_offline()
-		play.emit())
-	bottom.add_child(offline)
+	var single := Button.new()
+	single.text = "SINGLE PLAYER"
+	single.tooltip_text = "A world of your own, no server needed. Nothing is saved."
+	single.pressed.connect(func(): _show_form(_host_form, true))
+	bottom.add_child(single)
 	var back_b := Button.new()
 	back_b.text = "BACK"
 	back_b.custom_minimum_size.x = 240
@@ -135,11 +140,20 @@ func refresh_worlds() -> void:
 		return
 	_world_list = await worlds.list_worlds(s.url)
 	for w in _world_list:
-		_worlds.add_item("%s    %d online    host %s" % [w.name, w.online, w.host])
-		_worlds.set_item_tooltip(_worlds.item_count - 1, "%s\n%d players have joined\nseed %d" % [w.database, w.players, w.seed])
+		_worlds.add_item("%s    %s    %d online    host %s" % [w.name, EdenWorldSettings.describe(w.settings), w.online, w.host])
+		_worlds.set_item_tooltip(_worlds.item_count - 1, "%s\n%d players have joined\nseed %d\n%s" % [w.database, w.players,
+				w.seed, _settings_lines(w.settings)])
 	_set_status("%d world%s on %s." % [_world_list.size(), "" if _world_list.size() == 1 else "s", s.name] if not _world_list.is_empty() \
 			else "No worlds on %s yet." % s.name)
 	_update_buttons()
+
+
+## "Template: Archipelago" etc., one line per setting
+static func _settings_lines(settings: Dictionary) -> String:
+	var lines := []
+	for key in EdenWorldSettings.OPTIONS:
+		lines.append("%s: %s" % [EdenWorldSettings.OPTIONS[key][0], EdenWorldSettings.OPTIONS[key][1][settings[key]].name])
+	return "\n".join(lines)
 
 
 func _selected_server() -> Dictionary:
@@ -171,7 +185,7 @@ func _join_selected() -> void:
 		_set_status("%s can't be reached." % w.name)
 		return
 	await worlds.ensure_token(s.url)
-	EdenSession.play_online(s.url, w.database, meta.name, meta.seed)
+	EdenSession.play_online(s.url, w.database, meta.name, meta.seed, meta.settings)
 	play.emit()
 
 
@@ -182,8 +196,13 @@ func _host() -> void:
 		return
 	var seed_text := _host_seed.text.strip_edges()
 	var world_seed := int(seed_text) if seed_text.is_valid_int() else seed_text.hash()
+	if _single_player:
+		EdenSession.play_offline(world_name, world_seed, _form_settings())
+		play.emit()
+		return
 	_set_busy(true, "Creating %s (starting the server if needed)..." % world_name)
-	var r := await worlds.host_world(world_name, world_seed, EdenOptions.player_name, _host_lan.button_pressed)
+	var r := await worlds.host_world(world_name, world_seed, EdenOptions.player_name, _host_lan.button_pressed,
+			_form_settings())
 	_set_busy(false)
 	if r.has("error"):
 		_set_status(r.error)
@@ -251,16 +270,43 @@ func _make_host_form() -> Control:
 	_host_seed = LineEdit.new()
 	_host_seed.placeholder_text = "number or word"
 	form.add_child(_host_seed)
-	form.add_child(_label("Open to LAN", EdenUITheme.CREAM))
+	# One dropdown per world setting, its choice's description under it
+	for key in EdenWorldSettings.OPTIONS:
+		var choices: Dictionary = EdenWorldSettings.OPTIONS[key][1]
+		form.add_child(_label(EdenWorldSettings.OPTIONS[key][0], EdenUITheme.CREAM))
+		var cell := VBoxContainer.new()
+		var pick := OptionButton.new()
+		var about := _label("", Color(EdenUITheme.CREAM, 0.6))
+		about.add_theme_font_size_override("font_size", 12)
+		about.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		for id in choices:
+			pick.add_item(choices[id].name)
+			pick.set_item_tooltip(pick.item_count - 1, choices[id].description)
+		pick.item_selected.connect(func(i): about.text = choices.values()[i].description)
+		pick.select(choices.keys().find(EdenWorldSettings.DEFAULTS[key]))
+		about.text = choices[EdenWorldSettings.DEFAULTS[key]].description
+		cell.add_child(pick)
+		cell.add_child(about)
+		form.add_child(cell)
+		_host_settings[key] = pick
+	_host_lan_label = _label("Open to LAN", EdenUITheme.CREAM)
+	form.add_child(_host_lan_label)
 	_host_lan = CheckButton.new()
 	_host_lan.text = "Others on the network can join"
 	form.add_child(_host_lan)
 	form.add_child(Control.new())
-	var create := Button.new()
-	create.text = "CREATE WORLD"
-	create.pressed.connect(_host)
-	form.add_child(create)
+	_host_create = Button.new()
+	_host_create.pressed.connect(_host)
+	form.add_child(_host_create)
 	return form
+
+
+## The form's world settings (EdenWorldSettings)
+func _form_settings() -> Dictionary:
+	var out := {}
+	for key in _host_settings:
+		out[key] = EdenWorldSettings.OPTIONS[key][1].keys()[_host_settings[key].selected]
+	return out
 
 
 func _make_server_form() -> Control:
@@ -281,12 +327,17 @@ func _make_server_form() -> Control:
 	return form
 
 
-func _show_form(form: Control) -> void:
-	var show := not form.visible
+## Opens (or closes) a form. The world form either hosts a world or starts a single-player one.
+func _show_form(form: Control, single_player := false) -> void:
+	var show := not form.visible or (form == _host_form and single_player != _single_player)
 	_host_form.visible = false
 	_server_form.visible = false
 	form.visible = show
 	if show and form == _host_form:
+		_single_player = single_player
+		_host_lan_label.visible = not single_player
+		_host_lan.visible = not single_player
+		_host_create.text = "START" if single_player else "CREATE WORLD"
 		_host_seed.text = str(randi() % 1000000)
 		_host_name.grab_focus()
 	elif show:

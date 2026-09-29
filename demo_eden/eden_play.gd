@@ -21,7 +21,10 @@ func _ready() -> void:
 		placed.free()
 	terrain = world.get_node("VoxelLodTerrain")
 	if EdenSession.active:
+		# The world's seed and settings, on a copy (the scene's generator is shared with the menu and the editor)
+		terrain.generator = terrain.generator.duplicate()
 		terrain.generator.seed = EdenSession.seed
+		EdenWorldSettings.apply(terrain.generator, EdenSession.settings)
 	# Procedural moons and parent planet, from the world's seed (the scene's own when run from the editor)
 	EdenSkyBodies.apply_world(world, int(terrain.generator.seed))
 	ambience = terrain.get_node_or_null("EdenAmbience")
@@ -31,7 +34,9 @@ func _ready() -> void:
 	add_child(player)
 	player.set_planet(terrain)
 	player.global_position = spawn
-	EdenMusic.play_game()
+	var music := get_node_or_null("/root/EdenMusic")
+	if music:
+		music.play_game()
 	_show_loading()
 
 
@@ -75,9 +80,13 @@ func _find_spawn() -> Vector3:
 		var d := Vector3(cos(golden * i) * r, y, sin(golden * i) * r)
 		var s: Dictionary = gen.sample_surface(d)
 		var h := float(s.height)
-		if h < 15.0 or float(s.temperature) < 0.4 or float(s.temperature) > 0.7 or float(s.moisture) < 0.5 or float(s.landform) > 0.3:
+		if h < 15.0:
 			continue
 		var score := -absf(h - 120.0) * 0.01
+		if float(s.temperature) < 0.4 or float(s.temperature) > 0.7 or float(s.moisture) < 0.5 or float(s.landform) > 0.3:
+			score -= 1000.0 # any land will do if the world's settings leave a temperate meadow
+			if score <= best_score:
+				continue
 		if foliage and foliage.has_method("get_forest_density"):
 			var t := d.cross(Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT).normalized()
 			var o := d.rotated(t, 80.0 / R)

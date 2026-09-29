@@ -11,24 +11,30 @@ static var database := ""
 static var world_name := ""
 ## The planet generator's seed for this world
 static var seed := 12345
+## What kind of planet it is (EdenWorldSettings: template, temperature, rainfall)
+static var settings := EdenWorldSettings.DEFAULTS
 
 
-static func play_online(p_server: String, p_database: String, p_name: String, p_seed: int) -> void:
+static func play_online(p_server: String, p_database: String, p_name: String, p_seed: int,
+		p_settings := EdenWorldSettings.DEFAULTS) -> void:
 	active = true
 	offline = false
 	server = p_server
 	database = p_database
 	world_name = p_name
 	seed = p_seed
+	settings = EdenWorldSettings.normalized(p_settings)
 
 
-static func play_offline(p_seed := 12345) -> void:
+## A single-player world: no server, nothing saved
+static func play_offline(p_name := "Single Player", p_seed := 12345, p_settings := EdenWorldSettings.DEFAULTS) -> void:
 	active = true
 	offline = true
 	server = ""
 	database = ""
-	world_name = "Sandbox"
+	world_name = p_name
 	seed = p_seed
+	settings = EdenWorldSettings.normalized(p_settings)
 
 
 ## The WebSocket URL for the server (ws:// for http://, wss:// for https://)
