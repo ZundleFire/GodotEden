@@ -122,6 +122,8 @@ var _scene_ready := false
 ## Radius of the sea surface (the generator's planet_radius + sea_level); INF when the planet has no sea
 var _sea_radius := -INF
 var _hud: Label
+## Facing to take once the ground is found after restore_position (NAN: face north as usual)
+var _restore_yaw := NAN
 var _ambience: Node
 
 
@@ -136,6 +138,7 @@ func _ready() -> void:
 		return
 	ensure_input_actions()
 	_planet = get_node_or_null(planet_path) as Node3D
+	_apply_session()
 	_model = $Model
 	animator = _model.get_node("EdenCharacter/AnimationTree")
 	animator.run_speed = run_speed
@@ -244,6 +247,7 @@ func _setup_scene() -> void:
 		_hud.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 		_hud.add_theme_constant_override("outline_size", 6)
 		layer.add_child(_hud)
+		_hud.visible = EdenOptions.show_help
 	if enable_mining and _planet is VoxelLodTerrain:
 		miner = EdenMiner.new()
 		miner.name = "Miner"
@@ -267,6 +271,31 @@ func _setup_scene() -> void:
 				net.server_url = a.trim_prefix("--server=")
 		add_child(net)
 		net.setup(self)
+
+
+## The world the main menu picked (EdenSession): online or not and where, and the name others see (the planet's
+## seed is set by the scene before the terrain streams: eden_play.gd). Run straight from the editor, the scene's own
+## settings stay.
+func _apply_session() -> void:
+	EdenOptions.ensure_loaded()
+	player_name = EdenOptions.player_name
+	if not EdenSession.active:
+		return
+	online = not EdenSession.offline
+	if online:
+		server_url = EdenSession.ws_url()
+		database = EdenSession.database
+
+
+## Rejoining a saved world: the player goes back where the server last saw them (planet-relative) and waits for the
+## ground to load there
+func restore_position(planet_pos: Vector3, yaw: float) -> void:
+	var up := planet_pos.normalized()
+	global_position = _center() + planet_pos + up * 0.3
+	velocity = Vector3.ZERO
+	ready_to_move = false
+	_restore_yaw = yaw
+	reset_physics_interpolation()
 
 
 func set_planet(planet: Node3D) -> void:
@@ -315,8 +344,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and event.physical_keycode == KEY_ESCAPE and settings_menu == null:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		_yaw -= event.relative.x * mouse_sensitivity
-		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, camera_min_pitch, camera_max_pitch)
+		var sens := mouse_sensitivity * EdenOptions.mouse_sensitivity
+		_yaw -= event.relative.x * sens
+		_pitch = clampf(_pitch - event.relative.y * sens * (-1.0 if EdenOptions.invert_y else 1.0), camera_min_pitch, camera_max_pitch)
 
 
 ## Where and when you are, in plain terms: date, local time and season; the weather, temperature, wind and daylight
@@ -531,7 +561,8 @@ func _wait_for_ground(up: Vector3) -> void:
 		global_position = _center() + up * (_sea_radius - float_depth)
 		reset_physics_interpolation()
 	ready_to_move = true
-	_facing = _north(up)
+	_facing = _north(up) if is_nan(_restore_yaw) else _north(up).rotated(up, _restore_yaw)
+	_restore_yaw = NAN
 	global_basis = Basis.looking_at(_facing, up)
 
 
@@ -654,6 +685,8 @@ func _process(_delta: float) -> void:
 	# Camera height eases between standing, crouched and swimming (lifted clear of the water)
 	var cam_target := camera_height - 0.5 if crouching else (camera_height + 0.8 if swimming else camera_height)
 	_cam_height = lerpf(_cam_height, cam_target, 1.0 - exp(-_delta * 6.0))
+	if _camera:
+		_camera.fov = EdenOptions.fov
 	# Camera: above the character, turned to the camera heading and pitched, aligned with the planet
 	# The camera follows where the body is drawn (interpolated between physics steps), not the physics position,
 	# which moves in 60 Hz steps: on a faster display the whole world shuddered against the character

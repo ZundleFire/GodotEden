@@ -67,6 +67,43 @@ public static partial class Module
         public double days_per_second;
     }
 
+    // What this world is (one row, id 0): its name, the planet generator's seed and who created it. Set once by
+    // create_world, right after the host publishes the database.
+    [Table(Accessor = "world_meta", Public = true)]
+    public partial struct WorldMeta
+    {
+        [PrimaryKey]
+        public uint id;
+        public string name;
+        public long seed;
+        public Identity owner;
+        public Timestamp created_at;
+    }
+
+    // A player's inventory: item counts in the game's EdenMiner.ITEMS order. Kept between sessions like the
+    // player row (where they are), so rejoining puts them back as they left.
+    [Table(Accessor = "player_inventory", Public = true)]
+    public partial struct PlayerInventory
+    {
+        [PrimaryKey]
+        public Identity identity;
+        public System.Collections.Generic.List<int> counts;
+    }
+
+    // The server's world directory. Only used in the database named "eden-lobby" (the same module), which the game's
+    // world list reads on every server it knows: each hosted world lists itself there.
+    [Table(Accessor = "world_listing", Public = true)]
+    public partial struct WorldListing
+    {
+        [PrimaryKey]
+        public string database;
+        public string name;
+        public long seed;
+        public string host_name;
+        public Identity lister;
+        public Timestamp listed_at;
+    }
+
     [Reducer(ReducerKind.Init)]
     public static void Init(ReducerContext ctx)
     {
@@ -194,6 +231,82 @@ public static partial class Module
         var piece = ctx.Db.build_piece.id.Find(id) ?? throw new System.Exception("No such piece");
         CheckReach(ctx, piece.x, piece.y, piece.z);
         ctx.Db.build_piece.id.Delete(id);
+    }
+
+    // Names the world and fixes its seed. Only the first call counts (the host's, right after publishing).
+    [Reducer]
+    public static void create_world(ReducerContext ctx, string name, long seed)
+    {
+        if (ctx.Db.world_meta.id.Find(0) is not null)
+        {
+            return;
+        }
+        name = name.Trim();
+        if (name.Length == 0 || name.Length > 40)
+        {
+            throw new System.Exception("World names are 1-40 characters");
+        }
+        ctx.Db.world_meta.Insert(new WorldMeta { id = 0, name = name, seed = seed, owner = ctx.Sender, created_at = ctx.Timestamp });
+    }
+
+    const int MaxItems = 16;
+    const int MaxCount = 100000;
+
+    [Reducer]
+    public static void set_inventory(ReducerContext ctx, System.Collections.Generic.List<int> counts)
+    {
+        if (ctx.Db.player.identity.Find(ctx.Sender) is null)
+        {
+            throw new System.Exception("Join with set_name first");
+        }
+        if (counts.Count > MaxItems || counts.Exists(c => c < 0 || c > MaxCount))
+        {
+            throw new System.Exception("Bad inventory");
+        }
+        var row = new PlayerInventory { identity = ctx.Sender, counts = counts };
+        if (ctx.Db.player_inventory.identity.Find(ctx.Sender) is null)
+        {
+            ctx.Db.player_inventory.Insert(row);
+        }
+        else
+        {
+            ctx.Db.player_inventory.identity.Update(row);
+        }
+    }
+
+    // Lists (or relists) a hosted world in this server's directory. A listing belongs to whoever made it: only they
+    // can change or remove it.
+    [Reducer]
+    public static void list_world(ReducerContext ctx, string database, string name, long seed, string host_name)
+    {
+        if (database.Length == 0 || database.Length > 64 || name.Length == 0 || name.Length > 40 || host_name.Length > MaxName)
+        {
+            throw new System.Exception("Bad listing");
+        }
+        var row = new WorldListing { database = database, name = name, seed = seed, host_name = host_name, lister = ctx.Sender, listed_at = ctx.Timestamp };
+        if (ctx.Db.world_listing.database.Find(database) is WorldListing old)
+        {
+            if (old.lister != ctx.Sender)
+            {
+                throw new System.Exception("Listed by someone else");
+            }
+            ctx.Db.world_listing.database.Update(row);
+        }
+        else
+        {
+            ctx.Db.world_listing.Insert(row);
+        }
+    }
+
+    [Reducer]
+    public static void unlist_world(ReducerContext ctx, string database)
+    {
+        var old = ctx.Db.world_listing.database.Find(database) ?? throw new System.Exception("Not listed");
+        if (old.lister != ctx.Sender)
+        {
+            throw new System.Exception("Listed by someone else");
+        }
+        ctx.Db.world_listing.database.Delete(database);
     }
 
     [Reducer]

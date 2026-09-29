@@ -6,15 +6,18 @@ extends Node
 ##     follow their updates (smoothed), voxel edits by anyone are applied to the local terrain (all of them on
 ##     joining, so the world keeps its changes);
 ##   - sends this player's position/state ~10 times a second (update_player) and every dig/place (add_voxel_edit).
-## The identity token is kept in user://eden_net_token so a restart is the same player.
-## Made by EdenPlayer when Scene Setup > online is on (or the game runs with `-- --online`).
+## The world is the save: joining again puts the player back where the server last saw them, with the inventory
+## they left with (player_inventory, sent when it changes). The identity token is kept per server
+## (EdenWorlds.token, user://eden_tokens.cfg) so a restart is the same player.
+## Made by EdenPlayer when Scene Setup > online is on, the main menu joined a world, or `-- --online`.
 
 signal connected(identity: String)
 signal players_changed
 
 const PROTOCOL := "v1.json.spacetimedb"
 const SEND_INTERVAL := 0.1
-const TOKEN_PATH := "user://eden_net_token"
+## At most one inventory save per this many seconds
+const INVENTORY_INTERVAL := 1.0
 
 @export var server_url := "ws://127.0.0.1:3180"
 @export var database := "eden"
@@ -32,6 +35,8 @@ var edits_applied := 0
 var clock_updates := 0
 ## Where the last edit from someone else was applied (world space), for tests
 var last_edit_position := Vector3.ZERO
+## What joining restored: "position" and/or "inventory" -> true (for tests and the HUD)
+var restored := {}
 
 var _player: EdenPlayer
 var _ws := WebSocketPeer.new()
@@ -40,12 +45,14 @@ var _request := 0
 var _last_sent := {}
 var _token := ""
 var _idle := 0.0
+var _inventory_dirty := false
+var _inventory_t := 0.0
+var _joined := false
 
 
 func setup(player: EdenPlayer) -> void:
 	_player = player
-	if FileAccess.file_exists(TOKEN_PATH):
-		_token = FileAccess.get_file_as_string(TOKEN_PATH).strip_edges()
+	_token = EdenWorlds.token(_http_base())
 	_ws.supported_protocols = PackedStringArray([PROTOCOL])
 	_ws.inbound_buffer_size = 1 << 22
 	if _token != "":
@@ -55,6 +62,7 @@ func setup(player: EdenPlayer) -> void:
 	status = "connecting" if err == OK else "error"
 	if player.miner:
 		player.miner.edited.connect(_on_local_edit)
+		player.miner.inventory_changed.connect(func(): _inventory_dirty = true)
 	if player.builder:
 		player.builder.place_requested.connect(func(k: String, xf: Transform3D):
 			var o := xf.origin - _player._center()
@@ -75,6 +83,9 @@ func _process(delta: float) -> void:
 			if _send_t <= 0.0 and status == "online":
 				_send_t = SEND_INTERVAL
 				_send_state()
+			_inventory_t -= delta
+			if _inventory_dirty and _inventory_t <= 0.0 and status == "online":
+				_send_inventory()
 		WebSocketPeer.STATE_CLOSED:
 			if status != "error":
 				status = "error"
@@ -113,6 +124,20 @@ func _send_state() -> void:
 	_call("update_player", [p.x, p.y, p.z, state.yaw, state.state, state.speed])
 
 
+# The inventory as it is (not while the debug creative mode fills it: that isn't the player's)
+func _send_inventory() -> void:
+	_inventory_dirty = false
+	_inventory_t = INVENTORY_INTERVAL
+	if _player.miner == null or (_player.debug and _player.debug.creative):
+		return
+	_call("set_inventory", [Array(_player.miner.counts)])
+
+
+## The server as an http base (the key its token is kept under)
+func _http_base() -> String:
+	return server_url.replace("wss://", "https://").replace("ws://", "http://")
+
+
 # The body's facing as an angle from planet north (what the avatar is turned by on the other side)
 func _facing_angle() -> float:
 	var up := _player.up_direction
@@ -137,14 +162,16 @@ func _on_message(text: String) -> void:
 		var t: Dictionary = msg.IdentityToken
 		identity = _id(t.identity)
 		if t.get("token", "") != "" and t.token != _token:
-			var f := FileAccess.open(TOKEN_PATH, FileAccess.WRITE)
-			f.store_string(t.token)
+			_token = t.token
+			EdenWorlds.save_token(_http_base(), t.token)
 		_request += 1
 		_ws.send_text(JSON.stringify({"Subscribe": {
-			"query_strings": ["SELECT * FROM player", "SELECT * FROM voxel_edit", "SELECT * FROM build_piece", "SELECT * FROM world_clock"], "request_id": _request}}))
+			"query_strings": ["SELECT * FROM player", "SELECT * FROM voxel_edit", "SELECT * FROM build_piece", "SELECT * FROM world_clock",
+					"SELECT * FROM player_inventory"], "request_id": _request}}))
 		_call("set_name", [player_name])
 	elif msg.has("InitialSubscription"):
 		_apply_update(msg.InitialSubscription.database_update)
+		_restore()
 		status = "online"
 		if _player.builder:
 			_player.builder.online = true
@@ -180,6 +207,13 @@ func _apply_update(db_update: Dictionary) -> void:
 				"world_clock":
 					for r in inserts:
 						_clock_row(_row(r))
+				"player_inventory":
+					for r in inserts:
+						var row := _row(r)
+						if row.has("_array"): # column order: identity counts
+							row = {"identity": row._array[0], "counts": row._array[1]}
+						if _id(row.identity) == identity:
+							_own_inventory = row.counts
 				"build_piece":
 					for r in deletes:
 						var row := _piece_row(_row(r))
@@ -190,6 +224,28 @@ func _apply_update(db_update: Dictionary) -> void:
 						if _player.builder:
 							var q := Quaternion(row.qx, row.qy, row.qz, row.qw).normalized()
 							_player.builder.spawn(str(row.kind), Transform3D(Basis(q), _player._center() + Vector3(row.x, row.y, row.z)), int(row.id))
+
+
+var _own_inventory = null
+
+
+# Joining: put the player back where the server last saw them, with their inventory (once, on the first
+# subscription; a new player has no position yet and keeps the scene's spawn)
+func _restore() -> void:
+	if _joined:
+		return
+	_joined = true
+	var me: Dictionary = players.get(identity, {})
+	var pos := Vector3(float(me.get("x", 0.0)), float(me.get("y", 0.0)), float(me.get("z", 0.0)))
+	if pos.length() > 1.0:
+		_player.restore_position(pos, float(me.get("yaw", 0.0)))
+		restored["position"] = true
+	if _own_inventory is Array and _player.miner:
+		for i in mini(_own_inventory.size(), _player.miner.counts.size()):
+			_player.miner.counts[i] = int(_own_inventory[i])
+		_player.miner.refresh()
+		_inventory_dirty = false
+		restored["inventory"] = true
 
 
 # A row arrives as JSON text of the row (an object by field name, or an array in column order)

@@ -11,8 +11,13 @@ config_version=5
 [application]
 
 config/name="EdenDemo"
-run/main_scene="res://main.tscn"
+run/main_scene="res://menu/main_menu.tscn"
 config/features=PackedStringArray("4.6")
+
+[autoload]
+
+EdenApp="*res://menu/eden_app.gd"
+EdenMusic="*res://menu/eden_music.gd"
 
 [display]
 

@@ -2,6 +2,8 @@ extends Node3D
 ## Walk the V4 planet: the probe scene with an EdenPlayer spawned on a temperate meadow near a forest. The player
 ## sets up the rest itself (terrain collision, its viewer, the HUD and weather keys: see EdenPlayer's Scene Setup).
 ## _ocean_editor_probe.tscn also has an EdenPlayer placed in it; this scene removes that one and picks a spawn.
+## Started from the main menu, the planet is the chosen world's (EdenSession.seed), set before anything samples or
+## streams it.
 
 @export var world_scene: PackedScene = preload("res://_ocean_editor_probe.tscn")
 @export var player_scene: PackedScene = preload("res://Character/eden_player.tscn")
@@ -18,6 +20,10 @@ func _ready() -> void:
 		world.remove_child(placed)
 		placed.free()
 	terrain = world.get_node("VoxelLodTerrain")
+	if EdenSession.active:
+		terrain.generator.seed = EdenSession.seed
+	# Procedural moons and parent planet, from the world's seed (the scene's own when run from the editor)
+	EdenSkyBodies.apply_world(world, int(terrain.generator.seed))
 	ambience = terrain.get_node_or_null("EdenAmbience")
 	add_child(world)
 	var spawn := _find_spawn()
@@ -25,6 +31,34 @@ func _ready() -> void:
 	add_child(player)
 	player.set_planet(terrain)
 	player.global_position = spawn
+	EdenMusic.play_game()
+	_show_loading()
+
+
+## A loading screen over the world until the terrain under the player exists and they can move
+func _show_loading() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 100
+	add_child(layer)
+	var cover := ColorRect.new()
+	cover.color = Color(0.02, 0.03, 0.05)
+	cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(cover)
+	var label := Label.new()
+	label.theme = EdenUITheme.theme()
+	label.text = "LOADING %s..." % (EdenSession.world_name.to_upper() if EdenSession.active else "WORLD")
+	label.add_theme_font_size_override("font_size", 32)
+	label.set_anchors_preset(Control.PRESET_CENTER)
+	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	label.grow_vertical = Control.GROW_DIRECTION_BOTH
+	cover.add_child(label)
+	while not player.ready_to_move:
+		await get_tree().process_frame
+	await get_tree().create_timer(0.5).timeout # (let the first meshes draw in)
+	var tween := create_tween()
+	tween.tween_property(cover, "modulate:a", 0.0, 0.6)
+	await tween.finished
+	layer.queue_free()
 
 
 # A temperate, moist, gentle spot on land with forest nearby (golden-spiral search over the planet)

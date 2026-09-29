@@ -3,10 +3,10 @@
 [ext_resource type="Script" uid="uid://cq17jbsvkbhfl" path="res://_ocean_editor_probe.gd" id="1"]
 [ext_resource type="Shader" uid="uid://dfgwdf5l86w3o" path="res://shaders/EdenPlanet_LowPolyClimate.gdshader" id="2_g7vpv"]
 [ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
-[ext_resource type="Resource" uid="uid://p5u8mxk0bux2" path="res://foliage/eden_foliage_default.tres" id="foliage_config"]
-[ext_resource type="PackedScene" path="res://Character/eden_player.tscn" id="eden_player"]
-[ext_resource type="Script" path="res://settings/eden_graphics.gd" id="eden_graphics"]
-[ext_resource type="Script" path="res://settings/eden_calendar.gd" id="eden_calendar"]
+[ext_resource type="Script" uid="uid://dxurpodhvruym" path="res://settings/eden_calendar.gd" id="eden_calendar"]
+[ext_resource type="Script" uid="uid://cno10atvlqqpx" path="res://settings/eden_graphics.gd" id="eden_graphics"]
+[ext_resource type="PackedScene" uid="uid://cee0ea5okkekt" path="res://Character/eden_player.tscn" id="eden_player"]
+[ext_resource type="EdenFoliageConfig" uid="uid://p5u8mxk0bux2" path="res://foliage/eden_foliage_default.tres" id="foliage_config"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_j51q1"]
 
@@ -31,6 +31,11 @@ shader = ExtResource("2_g7vpv")
 shader_parameter/eden_weather_planet = Vector4(0, 0, 0, 0)
 shader_parameter/eden_weather_params = Vector4(0, 0, 0, 0)
 shader_parameter/eden_weather_snow = Vector4(0, 0, 0, 0)
+shader_parameter/eden_snow_trail_frame = Vector4(0, 0, 0, 0)
+shader_parameter/eden_snow_trail_u = Vector4(0, 0, 0, 0)
+shader_parameter/eden_snow_trail_v = Vector4(0, 0, 0, 0)
+shader_parameter/eden_calendar = Vector4(0, 0, 0, 0)
+shader_parameter/eden_calendar_axis = Vector4(0, 1, 0, 0)
 shader_parameter/u_planet_radius = 40000.0
 shader_parameter/u_planet_center_world = Vector3(0, 0, 0)
 shader_parameter/u_planet_north_world = Vector3(0, 1, 0)
@@ -336,11 +341,12 @@ group_uniforms;
 
 group_uniforms DepthFog;
 // Metres either side of sea level in which a depth-buffer hit is assumed to be the ocean itself
-// rather than a sea floor (see depth_from_water_to_object). Must clear the wave crests and the
-// patch skirts hanging below them -- under that, the sea reports itself as its own bottom. The
-// cost of raising it is that genuine terrain this close to sea level reads as deep water, which
-// pushes the shoreline foam band that far out from the waterline.
-uniform float floor_reject_band : hint_range(0.0, 20.0) = 3.5;
+// rather than a sea floor (see depth_from_water_to_object). Off by default: every sea floor within
+// the band reads as deep water, which at 3.5 m painted a dark deep-water strip along every beach
+// and switched the shore foam off. A depth-hit capture (demo_eden/_shore_capture.gd --debug-depth,
+// 2026-09-28) found no depth reads landing on the water itself, in the open sea or at grazing
+// angles; raise it only if hard-edged shallow-colour slabs along the crests come back.
+uniform float floor_reject_band : hint_range(0.0, 20.0) = 0.0;
 uniform vec4 color_deep : source_color = vec4(0.02, 0.09, 0.26, 1.0);
 uniform vec4 color_shallow : source_color = vec4(0.05, 0.45, 0.5, 0.25);
 uniform float beers_law = 0.08;
@@ -1232,7 +1238,7 @@ shader_parameter/ripple_origin = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 shader_parameter/ripple_up = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 shader_parameter/ripple_east = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 shader_parameter/ripple_zmax = PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-shader_parameter/ssr_steps = 16
+shader_parameter/ssr_steps = 8
 shader_parameter/ssr_max_distance = 150.0
 shader_parameter/ssr_thickness = 2.0
 shader_parameter/ssr_strength = 1.0
@@ -1335,32 +1341,47 @@ far_planet_radius = 40000.0
 mesh_block_size = 32
 
 [node name="EdenFoliage" type="EdenFoliage" parent="VoxelLodTerrain" unique_id=1086148909]
-up_mode = 1
 config = ExtResource("foliage_config")
-grass_fade_end = 100.0
-grass_wind_fade_start = 10.0
-grass_wind_fade_end = 20.0
+density_scale = 0.85
+grass_density_scale = 0.6
+blades_per_tuft = 5
+grass_lod_distance = 18.0
+far_blades_per_tuft = 3
+grass_fade_start = 30.0
+grass_fade_end = 45.0
+grass_wind_fade_start = 18.0
+grass_wind_fade_end = 29.25
+far_resolution_scale = 0.6
+far_visibility = 300.0
+detail_distance = 35.0
 tree_wind_fade_start = 10.0
 tree_wind_fade_end = 30.0
 
 [node name="EdenPlanetAtmosphere" type="EdenPlanetAtmosphere" parent="VoxelLodTerrain" unique_id=1264475597]
 planet_radius = 39900.0
-sun_light_energy = 1.7
 mie_scale_height = 75.0
 rayleigh_strength = 2.0
 ozone_strength = 1.0
 sun_angular_radius = 0.034906585
-moonb_direction = Vector3(0.79026794, -0.074757956, -0.60818404)
-sun_time_of_day = 0.653
+moonb_direction = Vector3(-0.46048108, -0.07475798, -0.884516)
+sun_time_of_day = 0.875
+sun_declination_deg = 23.371813
+sun_light_energy = 1.6958934
 moon_tint = Color(0.91090965, 0.9999996, 0.99624425, 1)
 moon_intensity = 0.14
-moon_angular_radius = 0.013613569
-moon_direction = Vector3(-0.83065856, -0.0017057533, -0.5567796)
-moon_glow_size = 0.012391837
+moon_angular_radius = 0.06981317
+moon_direction = Vector3(-0.43785468, -0.029303804, 0.89856815)
+moon_earthshine = 0.0
+moon_style = 2
+moon_style_seed = -25.0
+moon_phase = 0.546875
+moon_light_energy = 0.39947754
+moon_glow_intensity = 0.25
+moon_halo_intensity = 0.01
 fog_density = 0.00052
 fog_sun_intensity = 0.0
 fog_sun_scatter = 0.0
-light_ray_samples = 128
+light_ray_samples = 64
 sun_ray_intensity = 2.0
 sun_ray_threshold = 0.1
 moon_ray_intensity = 0.3
@@ -1379,12 +1400,20 @@ cloud_sunset_underlight = 0.25
 
 [node name="EdenAmbience" type="EdenAmbience" parent="VoxelLodTerrain" unique_id=1827038537]
 tonemapper = 4
+ssao_enabled = false
 sun_shadows = false
 haze_density = 0.0006
+wind_speed = 0.3
 wind_heading = 265.0
-leaves_amount = 0.01
+gustiness = 0.2
+year_phase = 0.2578125
+snow_rate = 1.0
+melt_rate = 1.0
+thunder_chance = 0.8
+fireflies_amount = 0.02
+fireflies_brightness = 2.0
+leaves_amount = 0.1
 dust_amount = 0.08
-audio_in_editor = true
 wind_volume = 0.2
 leaves_volume = 0.01
 surf_volume = 0.1
@@ -1413,21 +1442,22 @@ ring_self_shadow = 0.9
 [node name="EdenParentPlanet" type="EdenParentPlanet" parent="." unique_id=1927229448]
 parent_planet_enabled = true
 parent_planet_direction = Vector3(0.615, 0.485, 0.866)
-parent_planet_angular_radius = 0.29007372
+parent_planet_angular_radius = 0.63617253
 parent_planet_pixel_scale = 400.0
+parent_planet_seed = -13.0
+parent_planet_style = 1
 
 [node name="EdenSpaceEnvironment" type="EdenSpaceEnvironment" parent="." unique_id=871991094]
 space_panorama = ExtResource("3_g7vpv")
 space_texture_dir = "res://Panoramics"
 use_placeholder_panorama = false
 
-[node name="EdenPlayer" parent="." instance=ExtResource("eden_player")]
+[node name="EdenPlayer" parent="." unique_id=1944245540 instance=ExtResource("eden_player")]
 transform = Transform3D(0.951433, 0, 0.307857, -0.306961, -0.076236, 0.948664, 0.02347, -0.99709, -0.072533, -12281.195, -3050.116, 37955.125)
 planet_path = NodePath("../VoxelLodTerrain")
 
-[node name="EdenGraphics" type="Node" parent="."]
+[node name="EdenGraphics" type="Node" parent="." unique_id=999457698]
 script = ExtResource("eden_graphics")
-quality = 1
 
-[node name="EdenCalendar" type="Node" parent="."]
+[node name="EdenCalendar" type="Node" parent="." unique_id=1127003506]
 script = ExtResource("eden_calendar")
