@@ -53,10 +53,14 @@ func _show_loading() -> void:
 	label.theme = EdenUITheme.theme()
 	label.text = "LOADING %s..." % (EdenSession.world_name.to_upper() if EdenSession.active else "WORLD")
 	label.add_theme_font_size_override("font_size", 32)
-	label.set_anchors_preset(Control.PRESET_CENTER)
-	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	label.grow_vertical = Control.GROW_DIRECTION_BOTH
-	cover.add_child(label)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 20)
+	box.set_anchors_preset(Control.PRESET_CENTER)
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	cover.add_child(box)
+	box.add_child(label)
+	box.add_child(EdenLoadingBar.new()) # (no measure of the terrain streaming: it sweeps)
 	while not player.ready_to_move:
 		await get_tree().process_frame
 	await get_tree().create_timer(0.5).timeout # (let the first meshes draw in)

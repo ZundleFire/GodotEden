@@ -10,6 +10,8 @@ extends PanelContainer
 signal back
 ## A world was picked: EdenSession is set, the menu loads the game
 signal play
+## The planet to show behind the screen changed (a world picked, or the new-world form edited)
+signal preview(world_seed: int, settings: Dictionary)
 
 var worlds: EdenWorlds
 var _servers: ItemList
@@ -78,7 +80,10 @@ func _ready() -> void:
 	right.add_child(_label("WORLDS", EdenUITheme.GOLD))
 	_worlds = ItemList.new()
 	_worlds.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_worlds.item_selected.connect(func(_i): _update_buttons())
+	_worlds.item_selected.connect(func(_i):
+		_update_buttons()
+		var w := _selected_world()
+		preview.emit(int(w.seed), w.settings))
 	_worlds.item_activated.connect(func(_i): _join_selected())
 	right.add_child(_worlds)
 	var wrow := HBoxContainer.new()
@@ -194,8 +199,7 @@ func _host() -> void:
 	if world_name == "":
 		_set_status("Give the world a name.")
 		return
-	var seed_text := _host_seed.text.strip_edges()
-	var world_seed := int(seed_text) if seed_text.is_valid_int() else seed_text.hash()
+	var world_seed := _form_seed()
 	if _single_player:
 		EdenSession.play_offline(world_name, world_seed, _form_settings())
 		play.emit()
@@ -269,6 +273,7 @@ func _make_host_form() -> Control:
 	form.add_child(_label("Seed", EdenUITheme.CREAM))
 	_host_seed = LineEdit.new()
 	_host_seed.placeholder_text = "number or word"
+	_host_seed.text_changed.connect(func(_t): _preview_form())
 	form.add_child(_host_seed)
 	# One dropdown per world setting, its choice's description under it
 	for key in EdenWorldSettings.OPTIONS:
@@ -282,7 +287,9 @@ func _make_host_form() -> Control:
 		for id in choices:
 			pick.add_item(choices[id].name)
 			pick.set_item_tooltip(pick.item_count - 1, choices[id].description)
-		pick.item_selected.connect(func(i): about.text = choices.values()[i].description)
+		pick.item_selected.connect(func(i):
+			about.text = choices.values()[i].description
+			_preview_form())
 		pick.select(choices.keys().find(EdenWorldSettings.DEFAULTS[key]))
 		about.text = choices[EdenWorldSettings.DEFAULTS[key]].description
 		cell.add_child(pick)
@@ -299,6 +306,15 @@ func _make_host_form() -> Control:
 	_host_create.pressed.connect(_host)
 	form.add_child(_host_create)
 	return form
+
+
+func _form_seed() -> int:
+	var seed_text := _host_seed.text.strip_edges()
+	return int(seed_text) if seed_text.is_valid_int() else seed_text.hash()
+
+
+func _preview_form() -> void:
+	preview.emit(_form_seed(), _form_settings())
 
 
 ## The form's world settings (EdenWorldSettings)
@@ -340,6 +356,7 @@ func _show_form(form: Control, single_player := false) -> void:
 		_host_create.text = "START" if single_player else "CREATE WORLD"
 		_host_seed.text = str(randi() % 1000000)
 		_host_name.grab_focus()
+		_preview_form()
 	elif show:
 		_server_address.grab_focus()
 

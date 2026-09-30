@@ -13,27 +13,27 @@ const DEFAULTS := {"template": "eden", "temperature": "temperate", "rainfall": "
 ## id -> {name, description, params}. Order is the menu's. Measured (average of 3-6 seeds): land % of the surface,
 ## landmasses, the largest's share of the land. Earth for scale: 29% land, the largest (Afro-Eurasia) 57% of it.
 const TEMPLATES := {
-	# 38% land, one great continent (92% of the land) and a few islands
-	"eden": {"name": "Eden", "description": "The classic world: one great continent and its islands.",
-		"params": {}},
-	# 25% land, ~8 landmasses, largest 58%
+	# 31% land, ~7 landmasses, largest 55% (was one continent, 92%). A bit larger than Continents, with less ocean
+	"eden": {"name": "Eden", "description": "The classic world: a couple of great continents, smaller ones, and scattered islands.",
+		"params": {"continent_scale": 36000.0, "island_bias": -0.02, "continent_blend": 1.0}},
+	# 27% land, ~8 landmasses, largest 63%
 	"earthlike": {"name": "Earthlike", "description": "Oceans and continents in Earth's proportions.",
 		"params": {"continent_scale": 45000.0, "island_bias": -0.05, "continent_blend": 1.0}},
 	# 26% land, ~9 landmasses, largest 39%: several of similar size
 	"continents": {"name": "Continents", "description": "Several continents of similar size, split by open ocean.",
 		"params": {"continent_scale": 35000.0, "island_bias": -0.05, "continent_blend": 1.0}},
-	# 50% land, ~2 landmasses, largest 96%
+	# 50% land, ~2.5 landmasses, largest 96%
 	"pangaea": {"name": "Pangaea", "description": "One vast supercontinent wrapped by a world ocean.",
 		"params": {"continent_scale": 100000.0, "island_bias": 0.1, "continent_blend": 1.0}},
-	# 36% land, ~12 landmasses, largest 46%
+	# 36% land, ~14 landmasses, largest 35%
 	"small_continents": {"name": "Small Continents", "description": "Many modest landmasses and narrow seas.",
-		"params": {"continent_scale": 22000.0, "island_bias": 0.0, "continent_blend": 0.9}},
-	# 25% land, ~14 landmasses, largest 32%
+		"params": {"continent_scale": 18000.0, "island_bias": 0.0, "continent_blend": 0.9}},
+	# 25% land, ~17 landmasses, largest 27%
 	"archipelago": {"name": "Archipelago", "description": "Chains of islands across a shallow ocean.",
 		"params": {"continent_scale": 22000.0, "island_bias": -0.12, "continent_blend": 0.7}},
-	# 10% land, ~4 landmasses
+	# 10% land, ~10 landmasses, largest 22% (was 5 with one holding half the land)
 	"water_world": {"name": "Water World", "description": "Endless ocean and a handful of islands.",
-		"params": {"continent_scale": 40000.0, "island_bias": -0.2, "continent_blend": 1.0}},
+		"params": {"continent_scale": 25000.0, "island_bias": -0.2, "continent_blend": 0.9}},
 	# 51% land, mountains 66% of it (Eden: 27%)
 	"highlands": {"name": "Highlands", "description": "Rugged land, mountain ranges everywhere.",
 		"params": {"mountain_coverage": 0.65, "terrain_amplitude": 3400.0, "island_bias": 0.1}},

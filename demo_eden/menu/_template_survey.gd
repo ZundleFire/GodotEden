@@ -44,7 +44,7 @@ func _initialize() -> void:
 				gen.set(k, extra[k])
 			var r := _survey(gen, out.path_join("%s_%d.png" % [id, s]) if s == 0 else "")
 			for k in sums.size():
-				sums[k] += r[k] / seeds
+				sums[k] += float(r[k]) / seeds
 		print(("TEMPLATE %-17s land %5.1f%%  landmasses %4.1f  largest %5.1f%% of land  mountains %5.1f%% of land" +
 				"  | temp %.2f  moist %.2f  cold %5.1f%%  dry %5.1f%%") % ([id] + sums))
 	probe.free()

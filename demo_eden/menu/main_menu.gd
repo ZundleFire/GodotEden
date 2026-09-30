@@ -39,8 +39,8 @@ const PLAY_SCENE := "res://eden_play.tscn"
 ## centre and the moon sit on screen (off-screen is fine: a horizon), roll round the moon. The screens' panels sit in
 ## the middle, so the planet frames them.
 const VIEWS := {
-	# Skimming low over the planet: its horizon along the bottom, the moon high on the right
-	"play": {"orbit_distance": 1.45, "planet_screen": Vector2(0.5, 2.7), "moon_screen": Vector2(0.9, 0.14), "roll": 0.0},
+	# The whole planet beside the Play panel (which takes the left of the screen), the moon high on the right
+	"play": {"orbit_distance": 4.5, "planet_screen": Vector2(0.81, 0.52), "moon_screen": Vector2(0.93, 0.12), "roll": 0.0},
 	# Close, filling the right side
 	"options": {"orbit_distance": 2.0, "planet_screen": Vector2(1.05, 0.55), "moon_screen": Vector2(0.08, 0.2),
 		"roll": -1.2},
@@ -67,6 +67,11 @@ var _screen: Control
 var _options: EdenSettingsMenu
 var _graphics: EdenGraphics
 var _loading: Label
+var _loading_box: VBoxContainer
+var _loading_bar: EdenLoadingBar
+## The menu planet's generator as first built: previews copy it
+var _base_gen: Resource
+var _preview_id := 0
 var _views := VIEWS.duplicate()
 var _view := "main"
 var _view_tween: Tween
@@ -116,6 +121,7 @@ func _build_world() -> void:
 		gen = gen.duplicate()
 		gen.seed = menu_seed
 		_terrain.set("generator", gen)
+		_base_gen = gen.duplicate()
 	EdenSkyBodies.apply_world(world, menu_seed, false)
 	_terrain.set("lod_distance", terrain_lod_distance)
 	add_child(world)
@@ -148,6 +154,21 @@ func _build_world() -> void:
 	if not Engine.is_editor_hint():
 		camera.make_current()
 	_place_camera()
+
+
+## Shows the planet a world would have (its seed and EdenWorldSettings) behind the Play screen. Waits a moment so
+## typing a seed or flicking through options meshes only the last one.
+func preview_world(world_seed: int, settings: Dictionary) -> void:
+	_preview_id += 1
+	var id := _preview_id
+	await get_tree().create_timer(0.4).timeout
+	if id != _preview_id or _base_gen == null:
+		return
+	var gen := _base_gen.duplicate()
+	gen.seed = world_seed
+	EdenWorldSettings.apply(gen, settings)
+	_terrain.set("generator", gen)
+	EdenSkyBodies.apply_world(world, world_seed, false)
 
 
 ## The moon's direction from the planet (it follows the sun: the phase is held)
@@ -255,11 +276,19 @@ func _build_ui() -> void:
 	version.position = Vector2(16, -26)
 	_ui.add_child(version)
 
+	_loading_box = VBoxContainer.new()
+	_loading_box.add_theme_constant_override("separation", 20)
+	_loading_box.set_anchors_preset(Control.PRESET_CENTER)
+	_loading_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_loading_box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_loading_box.visible = false
+	_ui.add_child(_loading_box)
 	_loading = Label.new()
 	_loading.add_theme_font_size_override("font_size", 32)
-	_loading.set_anchors_preset(Control.PRESET_CENTER)
-	_loading.visible = false
-	_ui.add_child(_loading)
+	_loading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_box.add_child(_loading)
+	_loading_bar = EdenLoadingBar.new()
+	_loading_box.add_child(_loading_bar)
 
 	_options = EdenSettingsMenu.new()
 	add_child(_options)
@@ -278,6 +307,8 @@ func _set_screen(screen: Control, view := "main") -> void:
 	if screen:
 		var center := CenterContainer.new()
 		center.set_anchors_preset(Control.PRESET_FULL_RECT)
+		if view == "play":
+			center.anchor_right = 0.62 # (the planet fills the rest)
 		center.add_child(screen)
 		_ui.add_child(center)
 		_screen = center
@@ -287,6 +318,7 @@ func _show_play() -> void:
 	var play := EdenPlayScreen.new()
 	play.back.connect(func(): _set_screen(null))
 	play.play.connect(_start_game)
+	play.preview.connect(preview_world)
 	_set_screen(play, "play")
 	play.refresh()
 
@@ -381,12 +413,24 @@ func _start_game() -> void:
 	_buttons.visible = false
 	_title.visible = false
 	_loading.text = "LOADING %s..." % EdenSession.world_name.to_upper()
-	_loading.visible = true
-	_loading.position = get_viewport().get_visible_rect().size * 0.5 - _loading.get_minimum_size() * 0.5
-	# Let the loading text draw before the (blocking) scene load
+	_loading_box.visible = true
+	_loading_bar.value = 0.0
+	# Load the game scene on a thread so the bar moves; building the world afterwards (EdenPlay's own loading cover)
+	# still blocks a moment
+	ResourceLoader.load_threaded_request(PLAY_SCENE)
+	var progress := []
+	var status := ResourceLoader.THREAD_LOAD_IN_PROGRESS
+	while status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		await get_tree().process_frame
+		status = ResourceLoader.load_threaded_get_status(PLAY_SCENE, progress)
+		_loading_bar.value = progress[0]
+	if status != ResourceLoader.THREAD_LOAD_LOADED:
+		_loading.text = "COULDN'T LOAD THE GAME"
+		_loading_bar.value = 0.0
+		return
+	_loading_bar.value = 1.0
 	await get_tree().process_frame
-	await get_tree().process_frame
-	get_tree().change_scene_to_file(PLAY_SCENE)
+	get_tree().change_scene_to_packed(ResourceLoader.load_threaded_get(PLAY_SCENE))
 
 
 func _quit() -> void:
