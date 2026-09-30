@@ -2,7 +2,6 @@
 
 [ext_resource type="Script" uid="uid://cq17jbsvkbhfl" path="res://_ocean_editor_probe.gd" id="1"]
 [ext_resource type="Shader" uid="uid://dfgwdf5l86w3o" path="res://shaders/EdenPlanet_LowPolyClimate.gdshader" id="2_g7vpv"]
-[ext_resource type="Texture2D" uid="uid://bi6ytmuq466vs" path="res://Panoramics/SkySphere_01.HDR" id="3_g7vpv"]
 [ext_resource type="Script" uid="uid://dxurpodhvruym" path="res://settings/eden_calendar.gd" id="eden_calendar"]
 [ext_resource type="Script" uid="uid://cno10atvlqqpx" path="res://settings/eden_graphics.gd" id="eden_graphics"]
 [ext_resource type="PackedScene" uid="uid://cee0ea5okkekt" path="res://Character/eden_player.tscn" id="eden_player"]
@@ -1448,7 +1447,6 @@ parent_planet_seed = -13.0
 parent_planet_style = 1
 
 [node name="EdenSpaceEnvironment" type="EdenSpaceEnvironment" parent="." unique_id=871991094]
-space_panorama = ExtResource("3_g7vpv")
 space_texture_dir = "res://Panoramics"
 use_placeholder_panorama = false
 

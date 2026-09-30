@@ -5,7 +5,7 @@ extends Node3D
 ## The background is the real planet (the probe scene: V4 terrain, atmosphere, clouds, ocean, rings, space) with
 ## its player and cameras taken out. The camera is placed each frame so the planet fills the left of the screen and
 ## the (real) moon hangs beside the title; the moon is held near full, opposite the sun, so the side of the planet
-## we see is in daylight. As the calendar runs the sun and moon move, and everything turns together.
+## we see is in daylight. As the calendar runs the sun, moon, stars and panorama turn round the planet; the planet and camera stay put.
 ##   Play        EdenPlayScreen: worlds on SpacetimeDB servers (join, host, delete), or the offline sandbox
 ##   Options     EdenSettingsMenu (graphics, controls, audio, profile)
 ##   Schematica  what it will be (design gear and planets before playing; design/gdd/schematica-system.md)
@@ -23,18 +23,34 @@ const PLAY_SCENE := "res://eden_play.tscn"
 ## The moon's phase held in the menu (0.5 full, opposite the sun) and its size
 @export var moon_phase := 0.5
 @export var moon_angular_radius := 0.045
-## A slow sway of the view (radians, and radians/s)
 ## Roll of the view round the moon (radians): turns the rings' sweep across the screen
 @export var roll := -0.68
-@export var sway := 0.06
-@export var sway_speed := 0.05
 ## The terrain's LOD distance in the menu. The camera is ~120 km out: at the scene's 128 m it meshes the planet from
 ## ~1 km voxels, and coastal sea floor pokes through the ocean. Measured (menu/_menu_capture.gd --lod=, GTX 750 Ti,
 ## 1080p, settled): 128 -> 13.2 ms/frame; 1024 -> 14.7 ms, detail like the finest; 512 keeps hitching (up to 300 ms)
-## as the camera's sway moves a LOD boundary across the planet.
+## as a moving camera drags a LOD boundary across the planet.
 @export var terrain_lod_distance := 1024.0
 @export var ring_tint := Color(0.82, 0.9, 1.0)
 @export var ring_opacity := 0.75
+## Seconds the camera takes to move between the screens' views
+@export var view_time := 1.8
+
+## The camera's view on each screen (the main one is the settings above): planet radii out, where the planet's
+## centre and the moon sit on screen (off-screen is fine: a horizon), roll round the moon. The screens' panels sit in
+## the middle, so the planet frames them.
+const VIEWS := {
+	# Skimming low over the planet: its horizon along the bottom, the moon high on the right
+	"play": {"orbit_distance": 1.45, "planet_screen": Vector2(0.5, 2.7), "moon_screen": Vector2(0.9, 0.14), "roll": 0.0},
+	# Close, filling the right side
+	"options": {"orbit_distance": 2.0, "planet_screen": Vector2(1.05, 0.55), "moon_screen": Vector2(0.08, 0.2),
+		"roll": -1.2},
+	# Far out: the whole planet small in the corner with its rings, the moon across the sky
+	"schematica": {"orbit_distance": 7.0, "planet_screen": Vector2(0.14, 0.24), "moon_screen": Vector2(0.86, 0.78),
+		"roll": 0.5},
+	# Close, rising from the bottom left
+	"mods": {"orbit_distance": 1.8, "planet_screen": Vector2(-0.1, 1.1), "moon_screen": Vector2(0.86, 0.18),
+		"roll": -0.3},
+}
 
 var world: Node3D
 var camera: Camera3D
@@ -43,6 +59,7 @@ var _radius := 40000.0
 var _orbit_axis := Vector3.UP
 var _atmosphere: Node
 var _time := 0.0
+var _ref_moon := Vector3.ZERO
 var _ui: Control
 var _buttons: VBoxContainer
 var _title: Control
@@ -50,9 +67,14 @@ var _screen: Control
 var _options: EdenSettingsMenu
 var _graphics: EdenGraphics
 var _loading: Label
+var _views := VIEWS.duplicate()
+var _view := "main"
+var _view_tween: Tween
 
 
 func _ready() -> void:
+	_views["main"] = {"orbit_distance": orbit_distance, "planet_screen": planet_screen, "moon_screen": moon_screen,
+			"roll": roll}
 	if Engine.is_editor_hint():
 		if world == null:
 			_build_world()
@@ -141,11 +163,15 @@ func _screen_dir(at: Vector2) -> Vector3:
 	return Vector3((at.x * 2.0 - 1.0) * t * size.x / size.y, (1.0 - at.y * 2.0) * t, -1.0).normalized()
 
 
-## Turns the camera so the moon falls on moon_screen (the rest of its roll from the rings' axis, swaying a little),
+## Turns the camera so the moon (where it was at start) falls on moon_screen (the rest of its roll from the rings' axis),
 ## then backs it off so the planet's centre falls on planet_screen
 func _place_camera() -> void:
-	var m := _moon_direction()
-	var up := _orbit_axis.rotated(m, roll + sway * sin(_time * sway_speed))
+	# Framed against the moon's direction at start, then locked to the planet: the sky (sun, moon, stars, panorama)
+	# turns around it, and the terrain viewer never moves, so the LODs don't re-mesh.
+	if _ref_moon == Vector3.ZERO:
+		_ref_moon = _moon_direction()
+	var m := _ref_moon
+	var up := _orbit_axis.rotated(m, roll)
 	var cam := _frame(_screen_dir(moon_screen), Vector3.UP)
 	var world_frame := _frame(m, up)
 	var basis := world_frame * cam.inverse()
@@ -158,6 +184,18 @@ static func _frame(forward: Vector3, up: Vector3) -> Basis:
 	var f := forward.normalized()
 	var u := (up - f * up.dot(f)).normalized()
 	return Basis(f, u, f.cross(u))
+
+
+## Eases the camera to a view: its distance, where the planet's centre and the moon sit on screen, its roll
+func _go_to_view(view: String) -> void:
+	if not _views.has(view) or view == _view:
+		return
+	_view = view
+	if _view_tween:
+		_view_tween.kill()
+	_view_tween = create_tween().set_parallel().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	for k in _views[view]:
+		_view_tween.tween_property(self, k, _views[view][k], view_time)
 
 
 func _process(delta: float) -> void:
@@ -229,8 +267,9 @@ func _build_ui() -> void:
 	_options.closed.connect(func(): _set_screen(null))
 
 
-## Shows a screen (or the buttons again for null), centred over the menu
-func _set_screen(screen: Control) -> void:
+## Shows a screen (or the buttons again for null), centred over the menu, and moves the camera to its view
+func _set_screen(screen: Control, view := "main") -> void:
+	_go_to_view(view)
 	if _screen and _screen != screen:
 		_screen.queue_free()
 	_screen = screen
@@ -248,13 +287,13 @@ func _show_play() -> void:
 	var play := EdenPlayScreen.new()
 	play.back.connect(func(): _set_screen(null))
 	play.play.connect(_start_game)
-	_set_screen(play)
+	_set_screen(play, "play")
 	play.refresh()
 
 
 func _show_options() -> void:
 	_options.open()
-	_set_screen(null)
+	_set_screen(null, "options")
 
 
 func _show_schematica() -> void:
@@ -264,7 +303,7 @@ func _show_schematica() -> void:
 	text.custom_minimum_size.x = 740
 	text.text = "Design before you play.\n\nSchematica is where you will design gear, armour and clothing from modular parts, and configure planets, then save them as Schematics. In the world, a Schematica Table turns a Schematic into the real thing, and designs you share may be picked up by AI factions that can build them.\n\nNot built yet: this is its place in the menu."
 	p[1].add_child(text)
-	_set_screen(p[0])
+	_set_screen(p[0], "schematica")
 
 
 func _show_mods() -> void:
@@ -293,7 +332,7 @@ func _show_mods() -> void:
 		DirAccess.make_dir_recursive_absolute("user://mods")
 		OS.shell_open(ProjectSettings.globalize_path("user://mods")))
 	box.add_child(folder)
-	_set_screen(p[0])
+	_set_screen(p[0], "mods")
 
 
 ## [{file, enabled, loaded}] from the EdenApp autoload
@@ -338,7 +377,7 @@ func _note(text: String) -> Label:
 
 
 func _start_game() -> void:
-	_set_screen(null)
+	_set_screen(null, "play")
 	_buttons.visible = false
 	_title.visible = false
 	_loading.text = "LOADING %s..." % EdenSession.world_name.to_upper()

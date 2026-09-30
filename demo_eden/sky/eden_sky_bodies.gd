@@ -88,16 +88,27 @@ static func apply_world(world: Node, world_seed: int, show_parent := true) -> vo
 			# No folder scan (it would load the first panorama just to replace it): pick one and load only that. The
 			# node rescans its (now empty) folder when it enters the tree and would clear a panorama set before, so
 			# it goes on after that.
-			var tex := load(files[b.panorama % files.size()])
+			var path := files[b.panorama % files.size()]
 			space.set("space_texture_dir", "")
 			space.set("use_placeholder_panorama", false)
 			var put := func():
 				space.call("rescan_panoramas")
-				space.set("space_panorama", tex)
+				_load_panorama(space, path)
 			if space.is_node_ready():
 				put.call()
 			else:
 				space.ready.connect(put, CONNECT_ONE_SHOT)
+
+
+## Loads one panorama on a thread (no hitch) and hands it to the space node; the previous one is released as it
+## is replaced, so only one is ever resident. Call again with another path to swap.
+static func _load_panorama(space: Node, path: String) -> void:
+	ResourceLoader.load_threaded_request(path)
+	var tree := Engine.get_main_loop() as SceneTree
+	while ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		await tree.process_frame
+	if is_instance_valid(space):
+		space.set("space_panorama", ResourceLoader.load_threaded_get(path))
 
 
 ## A body's painter under the world with this look (the one from an earlier apply_world, repainted)
