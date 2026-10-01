@@ -8,7 +8,9 @@ extends SceneTree
 
 const R := 40000.0
 ## EdenTreeShape types left to right, and whether EdenFoliage marks them deciduous
-const TYPES := [[0, "Oak", true], [2, "Birch", true], [1, "Pine", false], [3, "Willow", true], [6, "Fruit", true], [4, "Palm", false], [5, "Dead", false]]
+const TYPES := [[0, "Oak", true], [2, "Birch", true], [1, "Pine", false], [3, "Willow", true], [6, "Fruit", true], [4, "Palm", false],
+		[5, "Dead", false], [7, "Mahogany", false], [8, "Teak", false], [9, "Ebony", false], [10, "Rosewood", false], [11, "Maple", true],
+		[12, "Walnut", true], [13, "Cherry", true], [14, "Cedar", false], [15, "Spruce", false], [16, "Fir", false]]
 
 var args := {}
 var frames := 0
@@ -48,13 +50,17 @@ func _initialize() -> void:
 
 	# --only=Oak[,Pine..]: just those species (a close-up); camera: --dist, --cam_y, --look_x/y/z, --yaw (degrees)
 	var types := TYPES.filter(func(t: Array) -> bool: return not args.has("only") or t[1] in args.only.split(","))
-	var spacing := 6.5
+	var spacing := float(args.get("spacing", "6.5"))
 	for i in types.size():
 		var t: Array = types[i]
 		var mi := MeshInstance3D.new()
 		mi.mesh = EdenFoliageMeshes.tree(t[0], 1, int(args.get("variant", "0")))["mesh"]
 		var mat: ShaderMaterial = EdenFoliageMeshes.get_material(true).duplicate()
 		mat.set_shader_parameter("u_deciduous", t[2])
+		var autumn := EdenTreeGenerator.autumn_color(t[0])
+		var blossom := EdenTreeGenerator.blossom_color(t[0])
+		mat.set_shader_parameter("u_autumn", Vector4(autumn.r, autumn.g, autumn.b, autumn.a))
+		mat.set_shader_parameter("u_blossom", Vector4(blossom.r, blossom.g, blossom.b, blossom.a))
 		mat.set_shader_parameter("u_wind_strength", 0.0)
 		mi.material_override = mat
 		mi.position = Vector3((i - (types.size() - 1) * 0.5) * spacing, 0, 0)
